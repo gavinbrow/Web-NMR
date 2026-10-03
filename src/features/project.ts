@@ -1,6 +1,7 @@
 import { zip, unzip, strToU8, strFromU8, type Zippable } from "fflate";
 import { get, set, del } from "idb-keyval";
 import type { ComplexData, Project, Spectrum } from "../model";
+import { validProperties } from "./appearance";
 
 const MAX_BYTES = 256 * 1024 * 1024;
 const MAX_POINTS = 8_388_608;
@@ -88,6 +89,10 @@ export function validateProject(value: unknown): asserts value is Project {
     );
     ids.add(s.id);
     assert(
+      s.properties === undefined || validProperties(s.properties),
+      "Invalid spectrum appearance properties.",
+    );
+    assert(
       /^#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})$/i.test(s.color),
       "Invalid spectrum color. Use a hexadecimal color.",
     );
@@ -169,6 +174,57 @@ export function validateProject(value: unknown): asserts value is Project {
       "Invalid baseline anchors.",
     );
     assert(
+      r.baselineMethod === undefined ||
+        [
+          "polynomial",
+          "bernstein",
+          "whittaker",
+          "ablative",
+          "splines",
+          "pcbc",
+          "arpls",
+          "snip",
+          "apbk",
+        ].includes(r.baselineMethod),
+      "Invalid automatic baseline method.",
+    );
+    assert(
+      r.manualBaselineMethod === undefined ||
+        ["segments", "splines", "polynomial", "whittaker"].includes(
+          r.manualBaselineMethod,
+        ),
+      "Invalid manual baseline method.",
+    );
+    for (const key of [
+      "baselineOrder",
+      "baselineMedianWindow",
+      "baselineSmoothness",
+      "baselineIterations",
+      "baselineSnipWindow",
+      "baselineRatio",
+    ] as const)
+      assert(
+        r[key] === undefined ||
+          (finite(r[key]) && Math.abs(r[key]!) <= 100_000),
+        `Invalid ${key} parameter.`,
+      );
+    const region = (value: unknown): boolean =>
+      Array.isArray(value) &&
+      value.length === 2 &&
+      value.every(finite) &&
+      value[0] !== value[1];
+    assert(
+      r.baselineRegion === undefined || region(r.baselineRegion),
+      "Invalid baseline region.",
+    );
+    assert(
+      r.baselineExcludedRegions === undefined ||
+        (list(r.baselineExcludedRegions) &&
+          r.baselineExcludedRegions.length <= 1000 &&
+          r.baselineExcludedRegions.every(region)),
+      "Invalid excluded baseline regions.",
+    );
+    assert(
       list(s.peaks) &&
         s.peaks.every(
           (a) => a && text(a.id) && finite(a.ppm) && finite(a.height),
@@ -204,6 +260,50 @@ export function validateProject(value: unknown): asserts value is Project {
   assert(
     p.activeId === null || ids.has(p.activeId),
     "Active spectrum does not exist.",
+  );
+  const optional = p as Project & { stacks?: unknown; activeStackId?: unknown };
+  const stackIds = new Set<string>();
+  if (optional.stacks !== undefined) {
+    assert(
+      list(optional.stacks) && optional.stacks.length <= 200,
+      "Invalid spectrum stacks.",
+    );
+    for (const value of optional.stacks) {
+      const stack = value as {
+        id: string;
+        label: string;
+        spectrumIds: string[];
+        referenceId?: string;
+      };
+      assert(
+        stack && text(stack.id) && !stackIds.has(stack.id) && text(stack.label),
+        "Invalid or duplicate stack identity.",
+      );
+      stackIds.add(stack.id);
+      assert(
+        list(stack.spectrumIds) &&
+          stack.spectrumIds.length <= 200 &&
+          stack.spectrumIds.every((id) => text(id) && ids.has(id)) &&
+          new Set(stack.spectrumIds).size === stack.spectrumIds.length,
+        "Stack contains a missing or duplicate spectrum.",
+      );
+      assert(
+        stack.referenceId === undefined ||
+          (text(stack.referenceId) &&
+            stack.spectrumIds.includes(stack.referenceId)),
+        "Stack reference spectrum must be a member.",
+      );
+    }
+  }
+  assert(
+    optional.activeStackId === undefined ||
+      optional.activeStackId === null ||
+      (text(optional.activeStackId) && stackIds.has(optional.activeStackId)),
+    "Active stack does not exist.",
+  );
+  assert(
+    p.properties === undefined || validProperties(p.properties),
+    "Invalid project properties settings.",
   );
 }
 
@@ -311,7 +411,10 @@ export async function decodeProject(bytes: Uint8Array): Promise<Project> {
           "Project array length does not match its manifest.",
         );
         decodedBytes += source.byteLength;
-        assert(decodedBytes <= MAX_BYTES, "Decoded project arrays exceed the 256 MB limit.");
+        assert(
+          decodedBytes <= MAX_BYTES,
+          "Decoded project arrays exceed the 256 MB limit.",
+        );
         const result = new Float64Array(ref.length),
           dv = new DataView(
             source.buffer,

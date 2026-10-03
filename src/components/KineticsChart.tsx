@@ -2,9 +2,11 @@ import type { KineticPoint, KineticFit } from "../model";
 export function KineticsChart({
   points,
   fit,
+  label = "Integrated area",
 }: {
   points: KineticPoint[];
   fit: KineticFit | null;
+  label?: string;
 }) {
   const w = 700,
     h = 300,
@@ -114,7 +116,7 @@ export function KineticsChart({
         fontSize="11"
         fill="#505a65"
       >
-        Integrated area
+        {label}
       </text>
       <text x={pad.l} y="15" fontSize="11" fill="#505a65">
         Signal measurement · display gain excluded

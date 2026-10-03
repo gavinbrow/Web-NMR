@@ -4,6 +4,7 @@ import {
   type FidData,
   type Multiplet,
   type Peak,
+  type ProcessingRecipe,
   type Spectrum,
 } from "../model";
 
@@ -210,43 +211,761 @@ export function automaticBaseline(data: ComplexData): Float64Array {
   return baseline;
 }
 
-export function processSpectrum(s: Spectrum): ComplexData {
-  const data = sourceSpectrum(s);
-  applyPhase(
-    data,
-    s.recipe.ph0,
-    s.recipe.ph1,
-    s.recipe.pivotPpm - s.referenceOffset,
+function bounded(
+  value: number | undefined,
+  fallback: number,
+  low: number,
+  high: number,
+  label: string,
+): number {
+  const result = value ?? fallback;
+  if (!Number.isFinite(result) || result < low || result > high)
+    throw new Error(`${label} must be between ${low} and ${high}.`);
+  return result;
+}
+function median(values: number[]): number {
+  if (!values.length) return 0;
+  values.sort((a, b) => a - b);
+  const middle = Math.floor(values.length / 2);
+  return values.length % 2
+    ? values[middle]
+    : (values[middle - 1] + values[middle]) / 2;
+}
+function medianFilter(y: Float64Array, window: number): Float64Array {
+  const result = new Float64Array(y.length),
+    half = Math.floor(window / 2);
+  for (let i = 0; i < y.length; i++)
+    result[i] = median(
+      Array.from(
+        y.slice(Math.max(0, i - half), Math.min(y.length, i + half + 1)),
+      ),
+    );
+  return result;
+}
+function inBaselineRegion(ppm: number, recipe: ProcessingRecipe): boolean {
+  if (
+    recipe.baselineRegion &&
+    (ppm < Math.min(...recipe.baselineRegion) ||
+      ppm > Math.max(...recipe.baselineRegion))
+  )
+    return false;
+  return !(recipe.baselineExcludedRegions ?? []).some(
+    ([a, b]) => ppm >= Math.min(a, b) && ppm <= Math.max(a, b),
   );
-  if (s.recipe.baseline === "auto") {
-    const baseline = automaticBaseline(data);
-    for (let i = 0; i < data.real.length; i++) data.real[i] -= baseline[i];
+}
+function validateBaselineRegions(recipe: ProcessingRecipe): void {
+  const regions = [
+    ...(recipe.baselineRegion ? [recipe.baselineRegion] : []),
+    ...(recipe.baselineExcludedRegions ?? []),
+  ];
+  if (
+    regions.length > 1000 ||
+    regions.some((r) => r.length !== 2 || !r.every(Number.isFinite))
+  )
+    throw new Error("Baseline regions require two finite ppm boundaries.");
+}
+interface ReducedBaseline {
+  x: Float64Array;
+  y: Float64Array;
+  weights: Float64Array;
+}
+/** At most 2048 robust bin medians, with exclusions represented by zero fit weight. */
+function reduceBaseline(
+  data: ComplexData,
+  recipe: ProcessingRecipe,
+  offset: number,
+): ReducedBaseline {
+  let first = 0,
+    last = data.x.length - 1;
+  if (recipe.baselineRegion) {
+    const low = Math.min(...recipe.baselineRegion) - offset,
+      high = Math.max(...recipe.baselineRegion) - offset;
+    while (
+      first < data.x.length &&
+      (data.x[first] < low || data.x[first] > high)
+    )
+      first++;
+    while (last >= first && (data.x[last] < low || data.x[last] > high)) last--;
   }
-  if (s.recipe.baseline === "manual") {
-    const anchors = [...s.recipe.baselineAnchors].sort((a, b) => a.ppm - b.ppm);
+  if (last - first < 1)
+    throw new Error(
+      "Baseline region must contain at least two spectrum points.",
+    );
+  const count = Math.min(2048, last - first + 1),
+    x = new Float64Array(count),
+    y = new Float64Array(count),
+    weights = new Float64Array(count);
+  for (let b = 0; b < count; b++) {
+    const start = first + Math.floor((b * (last - first + 1)) / count),
+      end = first + Math.floor(((b + 1) * (last - first + 1)) / count),
+      values: number[] = [];
+    const step = Math.max(1, Math.floor((end - start) / 32));
+    for (let i = start; i < end; i += step)
+      if (inBaselineRegion(data.x[i] + offset, recipe))
+        values.push(data.real[i]);
+    x[b] = (data.x[start] + data.x[end - 1]) / 2 + offset;
+    y[b] = median(values);
+    weights[b] = values.length ? 1 : 0;
+  }
+  if (weights.reduce((a, b) => a + b, 0) < 2)
+    throw new Error("Baseline exclusions leave fewer than two usable points.");
+  const knownX: number[] = [],
+    knownY: number[] = [];
+  for (let i = 0; i < count; i++)
+    if (weights[i]) {
+      knownX.push(x[i]);
+      knownY.push(y[i]);
+    }
+  for (let i = 0; i < count; i++)
+    if (!weights[i]) y[i] = interpolate(knownX, knownY, x[i]);
+  return { x, y, weights };
+}
+function interpolate(
+  x: Float64Array | number[],
+  y: Float64Array | number[],
+  at: number,
+): number {
+  const n = x.length,
+    ascending = x[n - 1] > x[0];
+  if (ascending ? at <= x[0] : at >= x[0]) return y[0];
+  if (ascending ? at >= x[n - 1] : at <= x[n - 1]) return y[n - 1];
+  let low = 0,
+    high = n - 1;
+  while (high - low > 1) {
+    const m = (low + high) >> 1;
+    if (ascending ? x[m] <= at : x[m] >= at) low = m;
+    else high = m;
+  }
+  const t = (at - x[low]) / (x[high] - x[low]);
+  return y[low] * (1 - t) + y[high] * t;
+}
+function basis(t: number, order: number, bernstein: boolean): Float64Array {
+  const out = new Float64Array(order + 1);
+  if (bernstein) {
+    let choose = 1;
+    for (let k = 0; k <= order; k++) {
+      if (k) choose *= (order - k + 1) / k;
+      out[k] = choose * t ** k * (1 - t) ** (order - k);
+    }
+  } else {
+    const z = 2 * t - 1;
+    out[0] = 1;
+    if (order > 0) out[1] = z;
+    // Legendre coordinates span the same polynomial space without monomial instability at order 20.
+    for (let k = 2; k <= order; k++)
+      out[k] = ((2 * k - 1) * z * out[k - 1] - (k - 1) * out[k - 2]) / k;
+  }
+  return out;
+}
+function polynomialCoefficients(
+  t: Float64Array,
+  y: Float64Array,
+  weights: Float64Array,
+  order: number,
+  bernstein: boolean,
+): Float64Array {
+  const n = y.length,
+    width = order + 1,
+    q: Float64Array[] = [],
+    r = Array.from({ length: width }, () => new Float64Array(width));
+  const design = Array.from({ length: width }, () => new Float64Array(n));
+  for (let i = 0; i < n; i++) {
+    const values = basis(t[i], order, bernstein),
+      weight = Math.sqrt(weights[i]);
+    for (let k = 0; k < width; k++) design[k][i] = values[k] * weight;
+  }
+  const projection = new Float64Array(width);
+  for (let k = 0; k < width; k++) {
+    const column = design[k];
+    // Two-pass modified Gram-Schmidt for stable weighted Bernstein fits.
+    for (let pass = 0; pass < 2; pass++)
+      for (let j = 0; j < k; j++) {
+        let dot = 0;
+        for (let i = 0; i < n; i++) dot += q[j][i] * column[i];
+        r[j][k] += dot;
+        for (let i = 0; i < n; i++) column[i] -= dot * q[j][i];
+      }
+    let norm = 0;
+    for (const v of column) norm += v * v;
+    norm = Math.sqrt(norm);
+    if (norm < 1e-12)
+      throw new Error(
+        "Polynomial fit is underdetermined. Reduce its order or provide more baseline points.",
+      );
+    r[k][k] = norm;
+    for (let i = 0; i < n; i++) column[i] /= norm;
+    q.push(column);
+    for (let i = 0; i < n; i++)
+      projection[k] += column[i] * y[i] * Math.sqrt(weights[i]);
+  }
+  const coefficients = new Float64Array(width);
+  for (let k = width - 1; k >= 0; k--) {
+    let value = projection[k];
+    for (let j = k + 1; j < width; j++) value -= r[k][j] * coefficients[j];
+    coefficients[k] = value / r[k][k];
+  }
+  return coefficients;
+}
+function evaluatePolynomial(
+  t: Float64Array,
+  coefficients: Float64Array,
+  bernstein: boolean,
+): Float64Array {
+  return Float64Array.from(t, (value) => {
+    const b = basis(value, coefficients.length - 1, bernstein);
+    let result = 0;
+    for (let k = 0; k < b.length; k++) result += coefficients[k] * b[k];
+    return result;
+  });
+}
+function initialPeakWeights(
+  y: Float64Array,
+  weights: Float64Array,
+  window: number,
+): Float64Array {
+  const local = medianFilter(y, window),
+    residual = Array.from(y, (v, i) => v - local[i]),
+    center = median([...residual]);
+  const scale = Math.max(
+    1e-12,
+    Math.max(...y.map(Math.abs)) * 1e-8,
+    1.4826 * median(residual.map((v) => Math.abs(v - center))),
+  );
+  return Float64Array.from(
+    weights,
+    (w, i) => w * (Math.abs(residual[i] - center) > 3 * scale ? 0.001 : 1),
+  );
+}
+function robustPolynomial(
+  reduced: ReducedBaseline,
+  order: number,
+  bernstein: boolean,
+  window: number,
+): Float64Array {
+  const low = Math.min(reduced.x[0], reduced.x[reduced.x.length - 1]),
+    span = Math.abs(reduced.x[0] - reduced.x[reduced.x.length - 1]) || 1;
+  const t = Float64Array.from(reduced.x, (x) => (x - low) / span);
+  let weights = initialPeakWeights(reduced.y, reduced.weights, window);
+  let result: Float64Array = reduced.y.slice();
+  order = Math.min(
+    order,
+    Math.floor(reduced.weights.reduce((a, b) => a + b, 0)) - 1,
+  );
+  for (let iteration = 0; iteration < 8; iteration++) {
+    result = evaluatePolynomial(
+      t,
+      polynomialCoefficients(t, reduced.y, weights, order, bernstein),
+      bernstein,
+    );
+    const residual = Array.from(reduced.y, (v, i) => v - result[i]),
+      included = residual.filter((_, i) => reduced.weights[i] > 0),
+      center = median(included);
+    const scale = Math.max(
+      1e-12,
+      Math.max(...reduced.y.map(Math.abs)) * 1e-8,
+      1.4826 * median(included.map((v) => Math.abs(v - center))),
+    );
+    weights = Float64Array.from(
+      reduced.weights,
+      (w, i) =>
+        w *
+        Math.max(
+          1e-6,
+          Math.min(
+            1,
+            ((2.5 * scale) / Math.max(scale, Math.abs(residual[i] - center))) **
+              2,
+          ),
+        ),
+    );
+  }
+  return result;
+}
+/** O(n) LDL factorization of W + lambda D2' D2 (symmetric pentadiagonal). */
+export function whittakerSmooth(
+  y: Float64Array,
+  weights: Float64Array,
+  lambda: number,
+): Float64Array {
+  const n = y.length;
+  if (weights.length !== n || !(lambda >= 0) || !Number.isFinite(lambda))
+    throw new Error("Invalid Whittaker smoothing parameters.");
+  const diagonal = weights.slice(),
+    first = new Float64Array(Math.max(0, n - 1)),
+    second = new Float64Array(Math.max(0, n - 2));
+  for (let i = 0; i < n - 2; i++) {
+    diagonal[i] += lambda;
+    diagonal[i + 1] += 4 * lambda;
+    diagonal[i + 2] += lambda;
+    first[i] -= 2 * lambda;
+    first[i + 1] -= 2 * lambda;
+    second[i] += lambda;
+  }
+  const d = new Float64Array(n),
+    l1 = new Float64Array(n),
+    l2 = new Float64Array(n),
+    z = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    if (i >= 2) l2[i] = second[i - 2] / d[i - 2];
+    if (i >= 1)
+      l1[i] =
+        (first[i - 1] - (i >= 2 ? l2[i] * d[i - 2] * l1[i - 1] : 0)) / d[i - 1];
+    d[i] =
+      diagonal[i] +
+      1e-12 -
+      (i >= 1 ? l1[i] ** 2 * d[i - 1] : 0) -
+      (i >= 2 ? l2[i] ** 2 * d[i - 2] : 0);
+    if (!(d[i] > 0) || !Number.isFinite(d[i]))
+      throw new Error(
+        "Whittaker smoothing is numerically singular. Reduce smoothness or add anchors.",
+      );
+    z[i] =
+      weights[i] * y[i] -
+      (i >= 1 ? l1[i] * z[i - 1] : 0) -
+      (i >= 2 ? l2[i] * z[i - 2] : 0);
+  }
+  const out = new Float64Array(n);
+  for (let i = n - 1; i >= 0; i--)
+    out[i] =
+      z[i] / d[i] -
+      (i + 1 < n ? l1[i + 1] * out[i + 1] : 0) -
+      (i + 2 < n ? l2[i + 2] * out[i + 2] : 0);
+  return out;
+}
+function penalizedBaseline(
+  reduced: ReducedBaseline,
+  recipe: ProcessingRecipe,
+  asymmetric: boolean,
+): Float64Array {
+  const lambda =
+      10 **
+      bounded(recipe.baselineSmoothness, 6, 0, 12, "Baseline log10(lambda)"),
+    iterations = Math.round(
+      bounded(recipe.baselineIterations, 20, 1, 100, "Baseline iterations"),
+    );
+  const ratio = bounded(
+      recipe.baselineRatio,
+      1e-6,
+      1e-9,
+      0.1,
+      "Baseline convergence ratio",
+    ),
+    window = Math.round(
+      bounded(recipe.baselineMedianWindow, 9, 1, 101, "Baseline median window"),
+    );
+  let weights = initialPeakWeights(reduced.y, reduced.weights, window);
+  let out: Float64Array = reduced.y.slice();
+  for (let iteration = 0; iteration < iterations; iteration++) {
+    out = whittakerSmooth(reduced.y, weights, lambda);
+    const residual = Array.from(reduced.y, (v, i) => v - out[i]),
+      negative = residual.filter((v, i) => v < 0 && reduced.weights[i] > 0);
+    const mean = negative.length
+      ? negative.reduce((a, b) => a + b, 0) / negative.length
+      : 0;
+    const sd = Math.max(
+      1e-12,
+      Math.sqrt(
+        negative.reduce((sum, v) => sum + (v - mean) ** 2, 0) /
+          Math.max(1, negative.length),
+      ),
+    );
+    const center = median(residual.filter((_, i) => reduced.weights[i] > 0)),
+      scale = Math.max(
+        1e-12,
+        Math.max(...reduced.y.map(Math.abs)) * 1e-8,
+        median(residual.map((v) => Math.abs(v - center))) * 1.4826,
+      );
+    const next = Float64Array.from(reduced.weights, (w, i) => {
+      if (!w) return 0;
+      if (asymmetric) {
+        const exponent = Math.max(
+          -60,
+          Math.min(60, (2 * (residual[i] - (2 * sd - mean))) / sd),
+        );
+        return Math.max(1e-6, 1 / (1 + Math.exp(exponent)));
+      }
+      return Math.max(
+        1e-6,
+        Math.min(
+          1,
+          ((2.5 * scale) / Math.max(scale, Math.abs(residual[i] - center))) **
+            2,
+        ),
+      );
+    });
+    let change = 0,
+      size = 0;
+    for (let i = 0; i < weights.length; i++) {
+      change += (next[i] - weights[i]) ** 2;
+      size += weights[i] ** 2;
+    }
+    weights = next;
+    if (Math.sqrt(change / Math.max(1e-12, size)) < ratio) break;
+  }
+  return out;
+}
+function naturalSpline(x: number[], y: number[]): (at: number) => number {
+  const n = x.length,
+    second = new Float64Array(n),
+    work = new Float64Array(n);
+  for (let i = 1; i < n - 1; i++) {
+    const ratio = (x[i] - x[i - 1]) / (x[i + 1] - x[i - 1]),
+      p = ratio * second[i - 1] + 2;
+    second[i] = (ratio - 1) / p;
+    const slope =
+      (y[i + 1] - y[i]) / (x[i + 1] - x[i]) -
+      (y[i] - y[i - 1]) / (x[i] - x[i - 1]);
+    work[i] = ((6 * slope) / (x[i + 1] - x[i - 1]) - ratio * work[i - 1]) / p;
+  }
+  for (let i = n - 2; i >= 0; i--)
+    second[i] = second[i] * second[i + 1] + work[i];
+  return (at) => {
+    if (at <= x[0]) return y[0];
+    if (at >= x[n - 1]) return y[n - 1];
+    let low = 0,
+      high = n - 1;
+    while (high - low > 1) {
+      const m = (low + high) >> 1;
+      if (x[m] <= at) low = m;
+      else high = m;
+    }
+    const h = x[high] - x[low],
+      a = (x[high] - at) / h,
+      b = (at - x[low]) / h;
+    return (
+      a * y[low] +
+      b * y[high] +
+      (((a ** 3 - a) * second[low] + (b ** 3 - b) * second[high]) * h ** 2) / 6
+    );
+  };
+}
+function autoSpline(reduced: ReducedBaseline, window: number): Float64Array {
+  const seed = robustPolynomial(reduced, 3, false, window),
+    residual = Array.from(reduced.y, (v, i) => v - seed[i]);
+  const quiet = residual.filter((_, i) => reduced.weights[i] > 0),
+    center = median(quiet);
+  const noise = Math.max(
+    1e-12,
+    Math.max(...reduced.y.map(Math.abs)) * 1e-8,
+    median(quiet.map((v) => Math.abs(v - center))) * 1.4826,
+  );
+  const knots: { x: number; y: number }[] = [],
+    block = Math.max(4, Math.floor(reduced.y.length / 96));
+  for (let start = 0; start < reduced.y.length; start += block) {
+    const indices: number[] = [];
+    for (let i = start; i < Math.min(reduced.y.length, start + block); i++)
+      if (reduced.weights[i] && Math.abs(residual[i] - center) <= 3 * noise)
+        indices.push(i);
+    if (indices.length)
+      knots.push({
+        x: median(indices.map((i) => reduced.x[i])),
+        y: median(indices.map((i) => reduced.y[i])),
+      });
+  }
+  if (knots.length < 2)
+    return penalizedBaseline(
+      reduced,
+      { baselineSmoothness: 6, baseline: "auto" } as ProcessingRecipe,
+      false,
+    );
+  knots.sort((a, b) => a.x - b.x);
+  const spline = naturalSpline(
+    knots.map((k) => k.x),
+    knots.map((k) => k.y),
+  );
+  return Float64Array.from(reduced.x, spline);
+}
+/** Independent alternating peak shaving; intended for spectra without negative peaks. */
+function ablativeBaseline(
+  reduced: ReducedBaseline,
+  window: number,
+  iterations: number,
+): Float64Array {
+  let out = reduced.y.slice();
+  for (let sweep = 0; sweep < iterations; sweep++) {
+    const span = Math.max(1, Math.round(window * (1 - sweep / iterations))),
+      direction = sweep % 2 ? -1 : 1;
+    for (let j = span; j < out.length - span; j++) {
+      const i = direction > 0 ? j : out.length - 1 - j;
+      if (reduced.weights[i])
+        out[i] = Math.min(out[i], (out[i - span] + out[i + span]) / 2);
+    }
+  }
+  return medianFilter(out, 5);
+}
+/** SNIP log-log-square-root transform followed by symmetric iterative clipping. */
+function snipBaseline(reduced: ReducedBaseline, window: number): Float64Array {
+  const low = Math.min(...reduced.y),
+    shift = low < 0 ? -low : 0;
+  let out = Float64Array.from(reduced.y, (v) =>
+    Math.log(Math.log(Math.sqrt(Math.max(0, v + shift)) + 1) + 1),
+  );
+  for (let span = window; span >= 1; span--) {
+    const next = out.slice();
+    for (let i = span; i < out.length - span; i++)
+      if (reduced.weights[i])
+        next[i] = Math.min(out[i], (out[i - span] + out[i + span]) / 2);
+    out = next;
+  }
+  return Float64Array.from(
+    out,
+    (v) => (Math.exp(Math.exp(v) - 1) - 1) ** 2 - shift,
+  );
+}
+
+/** Returns full-resolution baseline values; excludes regions from both fitting and subtraction. */
+export function estimateBaseline(
+  data: ComplexData,
+  recipe: ProcessingRecipe,
+  offset = 0,
+): Float64Array {
+  validateBaselineRegions(recipe);
+  const baseline = new Float64Array(data.real.length);
+  if (recipe.baseline === "none") return baseline;
+  if (recipe.baseline === "manual") {
+    const anchors = [...recipe.baselineAnchors]
+      .sort((a, b) => a.ppm - b.ppm)
+      .filter((a) => inBaselineRegion(a.ppm, recipe));
     if (anchors.length < 2)
-      throw new Error("Manual baseline requires at least two anchors.");
+      throw new Error("Manual baseline requires at least two usable anchors.");
     if (
       anchors.some(
         (a, i) =>
           !Number.isFinite(a.ppm + a.value) ||
-          (i > 0 && a.ppm === anchors[i - 1].ppm),
+          (i && a.ppm === anchors[i - 1].ppm),
       )
     )
       throw new Error(
         "Baseline anchors must be finite and have unique positions.",
       );
-    for (let i = 0; i < data.real.length; i++) {
-      const ppm = data.x[i] + s.referenceOffset;
-      let b = 0;
-      while (b < anchors.length - 2 && ppm > anchors[b + 1].ppm) b++;
-      const a = anchors[b],
-        c = anchors[b + 1],
-        t = Math.max(0, Math.min(1, (ppm - a.ppm) / (c.ppm - a.ppm)));
-      data.real[i] -= a.value * (1 - t) + c.value * t;
+    const method = recipe.manualBaselineMethod ?? "segments",
+      x = anchors.map((a) => a.ppm),
+      y = anchors.map((a) => a.value);
+    let evaluator: (at: number) => number;
+    if (method === "segments") evaluator = (at) => interpolate(x, y, at);
+    else if (method === "splines") evaluator = naturalSpline(x, y);
+    else if (method === "polynomial") {
+      const order = Math.min(
+          Math.round(
+            bounded(
+              recipe.baselineOrder,
+              3,
+              1,
+              20,
+              "Baseline polynomial order",
+            ),
+          ),
+          anchors.length - 1,
+        ),
+        span = x[x.length - 1] - x[0];
+      const t = Float64Array.from(x, (at) => (at - x[0]) / span),
+        coefficients = polynomialCoefficients(
+          t,
+          Float64Array.from(y),
+          new Float64Array(x.length).fill(1),
+          order,
+          false,
+        );
+      evaluator = (at) =>
+        evaluatePolynomial(
+          Float64Array.of(Math.max(0, Math.min(1, (at - x[0]) / span))),
+          coefficients,
+          false,
+        )[0];
+    } else if (method === "whittaker") {
+      const size = 1024,
+        grid = Float64Array.from(
+          { length: size },
+          (_, i) => x[0] + ((x[x.length - 1] - x[0]) * i) / (size - 1),
+        ),
+        values = new Float64Array(size),
+        weights = new Float64Array(size);
+      for (let a = 0; a < anchors.length; a++) {
+        const i = Math.round(
+          ((x[a] - x[0]) / (x[x.length - 1] - x[0])) * (size - 1),
+        );
+        values[i] = y[a];
+        weights[i] = 1;
+      }
+      const smoothed = whittakerSmooth(
+        values,
+        weights,
+        10 **
+          bounded(
+            recipe.baselineSmoothness,
+            6,
+            0,
+            12,
+            "Baseline log10(lambda)",
+          ),
+      );
+      evaluator = (at) => interpolate(grid, smoothed, at);
+    } else throw new Error("Unsupported manual baseline method.");
+    for (let i = 0; i < baseline.length; i++) {
+      const ppm = data.x[i] + offset;
+      if (inBaselineRegion(ppm, recipe)) baseline[i] = evaluator(ppm);
     }
+    return baseline;
   }
-  return data;
+  if (
+    !recipe.baselineMethod &&
+    !recipe.baselineRegion &&
+    !recipe.baselineExcludedRegions?.length
+  ) {
+    const legacy = automaticBaseline(data);
+    for (let i = 0; i < baseline.length; i++)
+      if (inBaselineRegion(data.x[i] + offset, recipe)) baseline[i] = legacy[i];
+    return baseline;
+  }
+  const reduced = reduceBaseline(data, recipe, offset),
+    window = Math.round(
+      bounded(recipe.baselineMedianWindow, 9, 1, 101, "Baseline median window"),
+    );
+  const method = recipe.baselineMethod ?? "bernstein";
+  let model: Float64Array;
+  if (method === "polynomial" || method === "bernstein" || method === "pcbc")
+    model = robustPolynomial(
+      reduced,
+      Math.round(
+        bounded(recipe.baselineOrder, 3, 1, 20, "Baseline polynomial order"),
+      ),
+      method === "bernstein",
+      window,
+    );
+  else if (method === "whittaker" || method === "arpls" || method === "apbk")
+    model = penalizedBaseline(reduced, recipe, method === "arpls");
+  else if (method === "splines") model = autoSpline(reduced, window);
+  else if (method === "ablative")
+    model = ablativeBaseline(
+      reduced,
+      Math.round(
+        bounded(recipe.baselineSnipWindow, 40, 1, 512, "Peak shaving window"),
+      ),
+      Math.round(
+        bounded(recipe.baselineIterations, 20, 1, 100, "Baseline iterations"),
+      ),
+    );
+  else if (method === "snip")
+    model = snipBaseline(
+      reduced,
+      Math.min(
+        Math.floor(reduced.y.length / 2) - 1,
+        Math.round(
+          bounded(recipe.baselineSnipWindow, 40, 1, 512, "SNIP window"),
+        ),
+      ),
+    );
+  else throw new Error("Unsupported automatic baseline method.");
+  for (let i = 0; i < baseline.length; i++) {
+    const ppm = data.x[i] + offset;
+    if (inBaselineRegion(ppm, recipe))
+      baseline[i] = interpolate(reduced.x, model, ppm);
+  }
+  return baseline;
+}
+
+export interface BaselineProcessingResult {
+  data: ComplexData;
+  source: ComplexData;
+  baseline: ComplexData;
+  effectivePhase?: { ph0: number; ph1: number };
+}
+/** Preview and Apply share the identical fitted curve and corrected arrays. */
+export function processWithBaseline(s: Spectrum): BaselineProcessingResult {
+  let source = sourceSpectrum(s),
+    effectivePhase: { ph0: number; ph1: number } | undefined;
+  applyPhase(
+    source,
+    s.recipe.ph0,
+    s.recipe.ph1,
+    s.recipe.pivotPpm - s.referenceOffset,
+  );
+  // Regional fitting must not introduce a hidden global phase change outside the selected/excluded regions.
+  // The joint adaptations run baseline-only when a region mask is requested.
+  if (
+    s.recipe.baseline === "auto" &&
+    !s.recipe.baselineRegion &&
+    !s.recipe.baselineExcludedRegions?.length &&
+    (s.recipe.baselineMethod === "pcbc" || s.recipe.baselineMethod === "apbk")
+  ) {
+    if (!source.imag)
+      throw new Error(
+        "Joint phase/baseline methods require imaginary data or a raw FID.",
+      );
+    // Independent joint adaptation: remove a smooth baseline in both components, estimate phase on the residual,
+    // then refit baseline after that rotation. It does not reproduce proprietary PcBc/apbk internals or neural weights.
+    const method =
+        s.recipe.baselineMethod === "pcbc" ? "polynomial" : "whittaker",
+      fitRecipe = { ...s.recipe, baselineMethod: method } as ProcessingRecipe;
+    let extra0 = 0,
+      extra1 = 0;
+    for (let pass = 0; pass < 2; pass++) {
+      const r = estimateBaseline(source, fitRecipe, s.referenceOffset),
+        im = estimateBaseline(
+          { x: source.x, real: source.imag! },
+          fitRecipe,
+          s.referenceOffset,
+        );
+      const residual = {
+        x: source.x,
+        real: Float64Array.from(source.real, (v, i) => v - r[i]),
+        imag: Float64Array.from(source.imag!, (v, i) => v - im[i]),
+      };
+      const correction = autoPhase({
+        ...s,
+        original: residual,
+        recipe: {
+          ...s.recipe,
+          transform: false,
+          ph0: 0,
+          ph1: 0,
+          baseline: "none",
+        },
+      });
+      extra0 += correction.ph0;
+      extra1 += correction.ph1;
+      source = applyPhase(
+        source,
+        correction.ph0,
+        correction.ph1,
+        s.recipe.pivotPpm - s.referenceOffset,
+      );
+    }
+    effectivePhase = { ph0: s.recipe.ph0 + extra0, ph1: s.recipe.ph1 + extra1 };
+    const real = estimateBaseline(source, fitRecipe, s.referenceOffset),
+      imag = estimateBaseline(
+        { x: source.x, real: source.imag! },
+        fitRecipe,
+        s.referenceOffset,
+      );
+    const baseline = { x: source.x, real, imag },
+      data = {
+        x: source.x,
+        real: Float64Array.from(source.real, (v, i) => v - real[i]),
+        imag: Float64Array.from(source.imag!, (v, i) => v - imag[i]),
+      };
+    return { data, source, baseline, effectivePhase };
+  }
+  const curve = estimateBaseline(source, s.recipe, s.referenceOffset),
+    baseline = { x: source.x, real: curve };
+  const data = {
+    x: source.x,
+    real: Float64Array.from(source.real, (v, i) => v - curve[i]),
+    imag: source.imag?.slice(),
+  };
+  return { data, source, baseline };
+}
+export function processSpectrum(s: Spectrum): ComplexData {
+  if (s.recipe.baseline === "none") {
+    const data = sourceSpectrum(s);
+    return applyPhase(
+      data,
+      s.recipe.ph0,
+      s.recipe.ph1,
+      s.recipe.pivotPpm - s.referenceOffset,
+    );
+  }
+  return processWithBaseline(s).data;
 }
 
 export function autoPhase(s: Spectrum): { ph0: number; ph1: number } {

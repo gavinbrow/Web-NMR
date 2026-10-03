@@ -22,6 +22,7 @@ Open the local URL printed by the development server. Build the static applicati
 - Stack or overlay spectra of the same nucleus, select an active trace, show/hide/reorder members, normalize by maximum/absolute area, and adjust individual gain. Display factors never alter analytical areas.
 - Assign time points and measure a common region across 1D spectra. Fit linear, offset exponential decay, or offset exponential growth, with inclusion controls, residuals, R², RMSE, and half-life.
 - Export full-resolution spectra and analysis/kinetics CSV, JCAMP, SVG, PNG, or Print/Save PDF. Save and reopen a lossless `.webnmr` project archive.
+- Dark menus, resizable navigator/inspector/ribbon/results, and a right-click Properties dialog for 1D appearance, grid, axes, peaks, integral curves, multiplets, stacking, geometry and metadata. Appearance changes are included in figure exports and project archives.
 - Local IndexedDB recovery, edit undo/redo, separate zoom history, real/imaginary/magnitude/FID views, and collapsible panels.
 
 The initial project contains six explicitly labelled **synthetic demonstration spectra**. User-selected NMR files are decoded and processed in the browser; they are not uploaded to the hosting service. Source arrays, metadata, processing recipes, and analysis are preserved in the downloaded project. Local recovery is browser/origin specific; download a project for a portable copy.
@@ -37,6 +38,8 @@ The initial project contains six explicitly labelled **synthetic demonstration s
 | K / Ctrl or Cmd+K | Region peak picking / peak by peak |
 | L / R | Reference signal |
 | Shift+P | Manual phase |
+| B | Baseline method chooser with blue preview |
+| Shift+click | Select a range of spectra |
 | + / − | Increase / decrease display height |
 | Shift+Left / Right | Previous / next zoom |
 | Alt+Left / Right | Pan by a fixed amount |
@@ -48,9 +51,9 @@ Core bindings were checked against [Mnova's official documentation](https://mest
 
 ## Validation and limits
 
-28 automated tests cover analytical DFT/FFT comparison, phase and baseline replay, reference invariance, signed endpoint integration, multiplet spacing, big-endian/float64 decoding, project precision, malformed projects, analytical exports, kinetic parameter recovery, and shortcut matching. When the supplied `../Example Files` are present, the tests also load the proton and million-point carbon datasets, compare raw/processed peak positions, and reject COSY/NOESY as unsupported 2D. The local browser was checked for actual Bruker ZIP import, recovery, analysis, individual gain, kinetic fitting, and phase preview/cancel.
+64 automated tests cover analytical DFT/FFT comparison, phase and baseline replay, reference invariance, signed endpoint integration, multiplet spacing, big-endian/float64 decoding, project precision, malformed projects, analytical exports, kinetic parameter recovery, and shortcut matching. When the supplied `../Example Files` are present, the tests also load the proton and million-point carbon datasets, compare raw/processed peak positions, and reject COSY/NOESY as unsupported 2D. The local browser was checked for actual Bruker ZIP import, recovery, analysis, individual gain, kinetic fitting, and phase preview/cancel.
 
-Automatic phase is a positive-absorption heuristic for routine positive 1D spectra. The automatic baseline is a robust block/interpolation estimate; broad or signed signals require manual review. Raw and vendor-processed amplitude scales are not assumed interchangeable for quantitative kinetics. This version reports integrated signal trends; acquisition calibration and an internal standard are needed for concentration measurements. Numerical details are in [src/core/README.md](src/core/README.md).
+Automatic phase is a positive-absorption heuristic for routine positive 1D spectra. Automatic baseline methods include polynomial, Bernstein, Whittaker, splines, ablative shaving, arPLS and SNIP, plus clearly labelled independent joint phase/baseline adaptations for proprietary PcBc/apbk; broad or signed signals require manual review. Raw and vendor-processed amplitude scales are not assumed interchangeable for quantitative kinetics. Internal-standard kinetics reports area ratios corrected for proton count and optional concentrations from a known standard. Quantitative acquisition suitability must still be established. Numerical details are in [src/core/README.md](src/core/README.md).
 
 Native Varian/Agilent, JEOL, Mnova projects, compressed JCAMP, raw `ser` arrays, true 2D processing, structure assignment, freeform publication page layouts, and higher-order multiplet simulation are outside this initial build. Imports are limited to 256 MB; transforms to about four million points. Local recovery currently keeps one workspace per browser origin, so save portable projects when using several tabs.
 
@@ -63,3 +66,13 @@ Native Varian/Agilent, JEOL, Mnova projects, compressed JCAMP, raw `ser` arrays,
 - `.openai/hosting.json`: private static-site identity and build output directory.
 
 General-purpose dependencies are React, Lucide icons, fflate, and idb-keyval. The NMR algorithms and application state are independent implementations.
+
+## Stack and baseline workflow
+
+Click a spectrum to select it; Shift-click selects the range from the first clicked spectrum, and Ctrl/Cmd-click toggles an individual item. Red outlines show selection. Click empty space to clear it. Click **Stack** or **Stack selected** to create a named stack item in the left navigator. Original items remain available; stacks refer to the same spectrum records, so processing/alignment edits are reflected in both. Stacks, their order and members participate in undo/redo.
+
+A stack supports a shared integration region applied to every member, reference-peak alignment over a chosen region, individual horizontal dragging and exact ppm shifts. Reference edits translate stored phase pivots, baseline masks and analysis positions together without changing areas. Kinetics uses the active stack membership and its shared integral regions. Choose raw area, internal-standard ratio, or internal-standard concentration; CSV exports include regions, raw areas and validation errors.
+
+Press **B** to preview a fitted blue baseline on the uncorrected, phased spectrum. Choose a method and parameters, optionally limit the region or exclude blind regions, then Apply or Cancel. Manual points support segments, splines, polynomial and Whittaker smoothing. Extract exports the fitted model. PcBc/apbk choices are independently implemented adaptations, not reproductions of proprietary vendor internals; regional masks disable their global phase adjustment. Algorithms estimate on a bounded grid then interpolate onto the original numerical axis; measurements remain full resolution.
+
+The Properties dialog covers implemented 1D NMR options. Mnova settings for unsupported 2D, prediction, assignments and fitting plugins are not emulated. Browser page geometry uses percentages and pixels rather than desktop print-layout units.

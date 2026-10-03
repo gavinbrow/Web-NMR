@@ -1,10 +1,14 @@
 import { importEntries } from "./imports";
-import { autoPhase, processSpectrum } from "./numerics";
+import { autoPhase, processSpectrum, processWithBaseline } from "./numerics";
 import type { ImportEntry, Spectrum } from "../model";
 
 type Request =
   | { id: number; type: "import"; entries: ImportEntry[] }
-  | { id: number; type: "process" | "phase"; spectrum: Spectrum };
+  | {
+      id: number;
+      type: "process" | "phase" | "processBaseline";
+      spectrum: Spectrum;
+    };
 function outputBuffers(
   value: unknown,
   found = new Set<ArrayBuffer>(),
@@ -23,7 +27,9 @@ self.onmessage = (event: MessageEvent<Request>) => {
         ? importEntries(request.entries)
         : request.type === "process"
           ? processSpectrum(request.spectrum)
-          : autoPhase(request.spectrum);
+          : request.type === "processBaseline"
+            ? processWithBaseline(request.spectrum)
+            : autoPhase(request.spectrum);
     self.postMessage(
       { id: request.id, result },
       { transfer: outputBuffers(result) },

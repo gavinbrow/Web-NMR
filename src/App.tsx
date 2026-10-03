@@ -54,8 +54,8 @@ import type {
 } from "./model";
 import {
   importBrowserFiles,
-  processAsync,
   autoPhaseAsync,
+  processBaselineAsync,
 } from "./core/workerClient";
 import { detectPeaks, integrate, analyzeMultiplet } from "./core/numerics";
 import { createDemoSpectra } from "./features/demo";
@@ -74,10 +74,33 @@ import {
   exportFigureSVG,
   exportKineticsCSV,
 } from "./features/export";
-import { fitKinetics } from "./features/kinetics";
+import {
+  fitKinetics,
+  measureKinetics,
+  kineticsPoints as measuredPoints,
+} from "./features/kinetics";
+import {
+  defaultProperties,
+  type SpectrumProperties,
+} from "./features/appearance";
+import {
+  shiftSpectrum,
+  strongestPosition,
+  sharedIntegral,
+} from "./features/stacks";
+import { PropertiesDialog } from "./components/PropertiesDialog";
+import { BaselineDialog } from "./components/BaselineDialog";
+import type { SpectrumStack } from "./model";
 import { SpectrumPlot, dataStats } from "./components/SpectrumPlot";
 import { KineticsChart } from "./components/KineticsChart";
 
+type WorkspaceSnapshot = {
+  spectra: Spectrum[];
+  stacks: SpectrumStack[];
+  activeId: string;
+  activeStackId: string | null;
+  mode: Project["displayMode"];
+};
 type Table =
   "Peaks" | "Integrals" | "Multiplets" | "Spectra" | "Acquisition" | "History";
 type Panel =
@@ -233,6 +256,42 @@ export default function App() {
   const [spectra, setSpectra] = useState<Spectrum[]>(initial),
     [activeId, setActiveId] = useState(initial[0]?.id ?? ""),
     [selected, setSelected] = useState<string[]>([]);
+  const [stacks, setStacks] = useState<SpectrumStack[]>([]),
+    [activeStackId, setActiveStackId] = useState<string | null>(null),
+    [selectedStackId, setSelectedStackId] = useState<string | null>(null);
+  const [properties, setProperties] = useState(defaultProperties),
+    [propertiesOpen, setPropertiesOpen] = useState(false),
+    [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(
+      null,
+    );
+  const [baselineOpen, setBaselineOpen] = useState(false),
+    [baselineSource, setBaselineSource] = useState<Spectrum["data"] | null>(
+      null,
+    ),
+    [baselineCurve, setBaselineCurve] = useState<Spectrum["data"] | null>(null),
+    [baselineLoading, setBaselineLoading] = useState(false),
+    [baselineError, setBaselineError] = useState("");
+  const [navigatorWidth, setNavigatorWidth] = useState(184),
+    [inspectorWidth, setInspectorWidth] = useState(280),
+    [resultsHeight, setResultsHeight] = useState(198),
+    [ribbonHeight, setRibbonHeight] = useState(99);
+  const [alignFrom, setAlignFrom] = useState(4.24),
+    [alignTo, setAlignTo] = useState(4),
+    [alignTarget, setAlignTarget] = useState(4.12),
+    [shiftValue, setShiftValue] = useState(0),
+    [handAlign, setHandAlign] = useState(false),
+    [massIntegral, setMassIntegral] = useState(true);
+  const [kinMode, setKinMode] = useState<"area" | "ratio" | "concentration">(
+      "area",
+    ),
+    [stdFrom, setStdFrom] = useState(2.15),
+    [stdTo, setStdTo] = useState(2),
+    [targetProtons, setTargetProtons] = useState(1),
+    [stdProtons, setStdProtons] = useState(1),
+    [stdConcentration, setStdConcentration] = useState(1),
+    [concentrationUnit, setConcentrationUnit] = useState("mM");
+  const selectionAnchor = useRef<string>("");
+  const baselineJob = useRef(0);
   const [projectName, setProjectName] = useState("Reaction monitoring"),
     [isDemo, setIsDemo] = useState(true),
     [tab, setTab] = useState<Tab>("Analysis"),
@@ -251,7 +310,7 @@ export default function App() {
     [showIntegrals, setShowIntegrals] = useState(true);
   const [table, setTable] = useState<Table>("Integrals"),
     [tableOpen, setTableOpen] = useState(false),
-    [navigatorOpen, setNavigatorOpen] = useState(true),
+    [navigatorOpen, setNavigatorOpen] = useState(() => window.innerWidth > 620),
     [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth > 620),
     [filter, setFilter] = useState("");
   const [toast, setToast] = useState(""),
@@ -281,8 +340,8 @@ export default function App() {
   const [recovery, setRecovery] = useState<Project | null>(null),
     [ready, setReady] = useState(false),
     [saveState, setSaveState] = useState("Local workspace");
-  const undoRef = useRef<Spectrum[][]>([]),
-    redoRef = useRef<Spectrum[][]>([]),
+  const undoRef = useRef<WorkspaceSnapshot[]>([]),
+    redoRef = useRef<WorkspaceSnapshot[]>([]),
     [historyVersion, setHistoryVersion] = useState(0);
   const viewHistory = useRef<[number, number][]>([]),
     viewForward = useRef<[number, number][]>([]),
@@ -290,25 +349,48 @@ export default function App() {
     folderInput = useRef<HTMLInputElement>(null),
     projectInput = useRef<HTMLInputElement>(null),
     svgExport = useRef<(() => string) | null>(null),
-    job = useRef(0);
+    job = useRef(0),
+    navigatorList = useRef<HTMLDivElement>(null);
   const active = spectra.find((s) => s.id === activeId) ?? spectra[0];
+  const activeStack = stacks.find((s) => s.id === activeStackId);
+  const stackMembers = activeStack
+    ? activeStack.spectrumIds
+        .map((id) => spectra.find((s) => s.id === id))
+        .filter((s): s is Spectrum => !!s)
+    : [];
+  const activeProperties = useMemo(
+    () => ({ ...properties, ...active?.properties }),
+    [properties, active?.properties],
+  );
   const displayedActive = useMemo(
     () =>
       active
         ? {
             ...active,
-            data: preview ?? active.data,
-            recipe: preview || tool === "baseline" ? draft : active.recipe,
+            data:
+              baselineOpen && baselineSource
+                ? baselineSource
+                : (preview ?? active.data),
+            recipe:
+              preview || baselineOpen || tool === "baseline"
+                ? draft
+                : active.recipe,
           }
         : undefined,
-    [active, preview, tool, draft],
+    [active, preview, tool, draft, baselineOpen, baselineSource],
   );
   const plottedSpectra = useMemo(
-    () => spectra.map((s) => (s.id === active?.id ? displayedActive! : s)),
-    [spectra, active?.id, displayedActive],
+    () =>
+      (activeStack ? stackMembers : spectra).map((s) =>
+        s.id === active?.id ? displayedActive! : s,
+      ),
+    [spectra, active?.id, displayedActive, activeStack],
   );
   const project = (): Project => ({
     version: 1,
+    stacks,
+    activeStackId,
+    properties,
     name: projectName,
     spectra,
     activeId: active?.id ?? null,
@@ -351,6 +433,9 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [
     spectra,
+    stacks,
+    activeStackId,
+    properties,
     activeId,
     view,
     mode,
@@ -371,12 +456,28 @@ export default function App() {
     }
     setComponent("real");
   }, [activeId, active?.revision]);
-  function commit(next: Spectrum[]) {
-    undoRef.current.push(spectra);
+  function snapshot(): WorkspaceSnapshot {
+    return { spectra, stacks, activeId, activeStackId, mode };
+  }
+  function applySnapshot(v: WorkspaceSnapshot) {
+    setSpectra(v.spectra);
+    setStacks(v.stacks);
+    setActiveId(v.activeId);
+    setActiveStackId(v.activeStackId);
+    setSelectedStackId(v.activeStackId);
+    setMode(v.mode);
+    setPreview(null);
+    setBaselineOpen(false);
+    setSelected([]);
+    setFitEnabled(false);
+  }
+  function commit(next: Spectrum[], nextStacks = stacks) {
+    undoRef.current.push(snapshot());
     if (undoRef.current.length > 25) undoRef.current.shift();
     redoRef.current = [];
     setHistoryVersion((n) => n + 1);
     setSpectra(next);
+    setStacks(nextStacks);
   }
   function changeActive(fn: (s: Spectrum) => Spectrum) {
     if (!active || busy) return;
@@ -386,8 +487,8 @@ export default function App() {
     if (busy) return;
     const previous = undoRef.current.pop();
     if (previous) {
-      redoRef.current.push(spectra);
-      setSpectra(previous);
+      redoRef.current.push(snapshot());
+      applySnapshot(previous);
       setPreview(null);
       setHistoryVersion((n) => n + 1);
       notify("Edit undone");
@@ -397,8 +498,8 @@ export default function App() {
     if (busy) return;
     const next = redoRef.current.pop();
     if (next) {
-      undoRef.current.push(spectra);
-      setSpectra(next);
+      undoRef.current.push(snapshot());
+      applySnapshot(next);
       setPreview(null);
       setHistoryVersion((n) => n + 1);
       notify("Edit restored");
@@ -432,13 +533,34 @@ export default function App() {
       setView(next);
     }
   }
-  function selectSpectrum(id: string, multi = false) {
+  function selectSpectrum(
+    id: string,
+    multi = false,
+    range = false,
+    preserveStack = false,
+  ) {
     if (busy) return;
-    if (multi) {
+    if (!preserveStack) {
+      setActiveStackId(null);
+      setSelectedStackId(null);
+      setMode("single");
+    }
+    setBaselineOpen(false);
+    baselineJob.current++;
+    if (range) {
+      const ids = spectra
+        .filter((s) => s.label.toLowerCase().includes(filter.toLowerCase()))
+        .map((s) => s.id);
+      const a = ids.indexOf(selectionAnchor.current || activeId),
+        b = ids.indexOf(id);
+      setSelected(a < 0 ? [id] : ids.slice(Math.min(a, b), Math.max(a, b) + 1));
+    } else if (multi)
       setSelected((a) =>
         a.includes(id) ? a.filter((v) => v !== id) : [...a, id],
       );
-      return;
+    else {
+      setSelected([id]);
+      selectionAnchor.current = id;
     }
     const next = spectra.find((s) => s.id === id);
     if (next && active && next.nucleus !== active.nucleus) {
@@ -461,6 +583,10 @@ export default function App() {
   }
   function restore(p: Project) {
     setSpectra(p.spectra);
+    setStacks(p.stacks ?? []);
+    setActiveStackId(p.activeStackId ?? null);
+    setSelectedStackId(p.activeStackId ?? null);
+    setProperties({ ...defaultProperties(), ...p.properties });
     setActiveId(p.activeId ?? p.spectra[0]?.id ?? "");
     setProjectName(p.name);
     setView(p.view ?? [10, -0.5]);
@@ -511,6 +637,10 @@ export default function App() {
       setIsDemo(false);
       setProjectName(isDemo ? "Untitled project" : projectName);
       setMode("single");
+      setActiveStackId(null);
+      setSelectedStackId(null);
+      setSelected([first.id]);
+      if (isDemo) setStacks([]);
       setPreview(null);
       setTab("Analysis");
       setPanel("overview");
@@ -537,7 +667,9 @@ export default function App() {
       kind === "preview"
         ? [active]
         : scope === "all"
-          ? spectra
+          ? activeStack
+            ? stackMembers
+            : spectra
           : scope === "selected"
             ? spectra.filter((s) => selected.includes(s.id))
             : [active];
@@ -558,7 +690,9 @@ export default function App() {
           ...s,
           recipe: { ...recipe, baselineAnchors: [...recipe.baselineAnchors] },
         };
-        const data = await processAsync(updated);
+        const processed = await processBaselineAsync(updated);
+        const data = processed.data;
+
         if (ticket !== job.current) return;
         if (kind === "preview") {
           setPreview(data);
@@ -575,7 +709,7 @@ export default function App() {
             })),
             history: [
               ...s.history,
-              `${new Date().toLocaleTimeString()} · Processing: ${recipe.transform ? "FT · " : ""}phase ${recipe.ph0.toFixed(1)}°/${recipe.ph1.toFixed(1)}° · baseline ${recipe.baseline}`,
+              `${new Date().toLocaleTimeString()} · Processing: ${recipe.transform ? "FT · " : ""}phase ${recipe.ph0.toFixed(1)}°/${recipe.ph1.toFixed(1)}° · baseline ${recipe.baseline}${recipe.baseline !== "none" ? " / " + (recipe.baseline === "manual" ? recipe.manualBaselineMethod : recipe.baselineMethod) : ""}${processed.effectivePhase ? ` · joint phase ${processed.effectivePhase.ph0.toFixed(1)}°/${processed.effectivePhase.ph1.toFixed(1)}°` : ""}`,
             ],
             revision: s.revision + 1,
           });
@@ -586,6 +720,10 @@ export default function App() {
         setDraft(recipe);
         setPreview(null);
         setTool("select");
+        setBaselineOpen(false);
+        baselineJob.current++;
+        setBaselineCurve(null);
+        setBaselineSource(null);
         notify(
           "Processing applied. Integrals updated; peak and multiplet results cleared.",
         );
@@ -601,6 +739,10 @@ export default function App() {
     job.current++;
     setBusy("");
     setPreview(null);
+    setBaselineOpen(false);
+    baselineJob.current++;
+    setBaselineCurve(null);
+    setBaselineSource(null);
     if (active)
       setDraft({
         ...active.recipe,
@@ -633,13 +775,56 @@ export default function App() {
       notify(err(e));
     }
   }
-  function manualBaseline() {
+  function openBaseline(manual = false) {
     if (!active || busy) return;
+    setTab("Processing");
+    setPanel("baseline");
     setComponent("real");
-    toolMode("baseline", "baseline");
-    setDraft((d) => ({ ...d, baseline: "manual" }));
-    void process("preview", { ...draft, baseline: "none" });
+    setPreview(null);
+    setDraft({
+      ...active.recipe,
+      baseline: manual ? "manual" : "auto",
+      baselineMethod: active.recipe.baselineMethod ?? "bernstein",
+      baselineAnchors: [...active.recipe.baselineAnchors],
+    });
+    setTool(manual ? "baseline" : "select");
+    setInspectorOpen(false);
+    setBaselineCurve(null);
+    setBaselineSource(null);
+    setBaselineOpen(true);
+    setBaselineError("");
   }
+  function manualBaseline() {
+    openBaseline(true);
+  }
+  useEffect(() => {
+    if (!baselineOpen || !active) return;
+    const ticket = ++baselineJob.current;
+    setBaselineLoading(true);
+    const timer = setTimeout(() => {
+      const recipe =
+        draft.baseline === "manual" && draft.baselineAnchors.length < 2
+          ? { ...draft, baseline: "none" as const }
+          : draft;
+      void processBaselineAsync({ ...active, recipe })
+        .then((result) => {
+          if (ticket !== baselineJob.current) return;
+          setBaselineSource(result.source);
+          setBaselineCurve(result.baseline);
+          setBaselineError("");
+          setBaselineLoading(false);
+        })
+        .catch((e) => {
+          if (ticket !== baselineJob.current) return;
+          setBaselineError(err(e));
+          setBaselineLoading(false);
+        });
+    }, 160);
+    return () => {
+      clearTimeout(timer);
+      baselineJob.current++;
+    };
+  }, [baselineOpen, draft, active]);
   function autoPeaks(from?: number, to?: number) {
     if (!active || busy) return;
     const picked = detectPeaks(
@@ -677,6 +862,29 @@ export default function App() {
     if (!active || busy) return;
     if (from === to) {
       notify("Choose a region with two different limits.");
+      return;
+    }
+    if (activeStack && massIntegral) {
+      try {
+        const id = uid(),
+          label = `I${active.integrals.length + 1}`;
+        const updates = new Map(
+          stackMembers.map((s) => [
+            s.id,
+            sharedIntegral(s, from, to, id, label),
+          ]),
+        );
+        commit(spectra.map((s) => updates.get(s.id) ?? s));
+        setSelectedIntegral(id);
+        setKinFrom(Math.max(from, to));
+        setKinTo(Math.min(from, to));
+        setFitEnabled(false);
+        setTable("Integrals");
+        setTableOpen(true);
+        notify(`Shared integral added to ${updates.size} stack members`);
+      } catch (e) {
+        notify(err(e));
+      }
       return;
     }
     const area = integrate(active.data, active.referenceOffset, from, to);
@@ -787,29 +995,7 @@ export default function App() {
     if (!active || busy) return;
     const delta = targetPpm - clickedPpm;
     changeActive((s) => ({
-      ...s,
-      referenceOffset: s.referenceOffset + delta,
-      recipe: {
-        ...s.recipe,
-        pivotPpm: s.recipe.pivotPpm + delta,
-        baselineAnchors: s.recipe.baselineAnchors.map((a) => ({
-          ...a,
-          ppm: a.ppm + delta,
-        })),
-      },
-      revision: s.revision + 1,
-      peaks: s.peaks.map((p) => ({ ...p, ppm: p.ppm + delta })),
-      integrals: s.integrals.map((i) => ({
-        ...i,
-        from: i.from + delta,
-        to: i.to + delta,
-      })),
-      multiplets: s.multiplets.map((m) => ({
-        ...m,
-        from: m.from + delta,
-        to: m.to + delta,
-        center: m.center + delta,
-      })),
+      ...shiftSpectrum(s, delta),
       history: [
         ...s.history,
         `Reference · ${fmt(clickedPpm)} → ${fmt(targetPpm)} ppm`,
@@ -882,19 +1068,60 @@ export default function App() {
       integrals: active.integrals.map((p) => ({ ...p, id: uid() })),
       multiplets: active.multiplets.map((p) => ({ ...p, id: uid() })),
     };
-    commit([...spectra, s]);
+    commit(
+      [...spectra, s],
+      activeStack
+        ? stacks.map((st) =>
+            st.id === activeStack.id
+              ? { ...st, spectrumIds: [...st.spectrumIds, s.id] }
+              : st,
+          )
+        : stacks,
+    );
     setActiveId(s.id);
     notify("Spectrum duplicated for independent processing");
   }
   function deleteSpectrum(id: string) {
     if (busy) return;
     const next = spectra.filter((s) => s.id !== id);
-    commit(next);
-    if (id === activeId) setActiveId(next[0]?.id ?? "");
+    const nextStacks = stacks
+      .map((st) => ({
+        ...st,
+        spectrumIds: st.spectrumIds.filter((v) => v !== id),
+        referenceId:
+          st.referenceId === id
+            ? st.spectrumIds.find((v) => v !== id)
+            : st.referenceId,
+      }))
+      .filter((st) => st.spectrumIds.length);
+    commit(next, nextStacks);
+    const group = nextStacks.find((st) => st.id === activeStackId);
+    if (activeStackId && !group) {
+      setActiveStackId(null);
+      setSelectedStackId(null);
+      setMode("single");
+    }
+    if (id === activeId)
+      setActiveId(group?.spectrumIds[0] ?? next[0]?.id ?? "");
+    setSelected((a) => a.filter((v) => v !== id));
     notify("Spectrum removed · Undo to restore");
   }
   function moveSpectrum(id: string, direction: number) {
     if (busy) return;
+    if (activeStack) {
+      const ids = [...activeStack.spectrumIds],
+        i = ids.indexOf(id),
+        j = i + direction;
+      if (i < 0 || j < 0 || j >= ids.length) return;
+      [ids[i], ids[j]] = [ids[j], ids[i]];
+      commit(
+        spectra,
+        stacks.map((st) =>
+          st.id === activeStack.id ? { ...st, spectrumIds: ids } : st,
+        ),
+      );
+      return;
+    }
     const next = [...spectra],
       i = next.findIndex((s) => s.id === id),
       j = i + direction;
@@ -902,12 +1129,150 @@ export default function App() {
     [next[i], next[j]] = [next[j], next[i]];
     commit(next);
   }
+  function createStack() {
+    const members = spectra.filter((s) => selected.includes(s.id));
+    if (members.length < 2) {
+      notify("Shift-click at least two spectra, then click Stack selected.");
+      return;
+    }
+    if (new Set(members.map((s) => s.nucleus)).size > 1) {
+      notify("Choose spectra with the same observed nucleus for one stack.");
+      return;
+    }
+    const st: SpectrumStack = {
+      id: uid(),
+      label: `Stack ${stacks.length + 1}`,
+      spectrumIds: members.map((s) => s.id),
+      referenceId: members[0].id,
+    };
+    commit(spectra, [...stacks, st]);
+    if (navigatorList.current) navigatorList.current.scrollTop = 0;
+    openStack(st);
+    setSelected([]);
+    notify(`Created ${st.label} with ${members.length} spectra`);
+  }
+  function openStack(st: SpectrumStack) {
+    if (busy) return;
+    baselineJob.current++;
+    setBaselineOpen(false);
+    setActiveStackId(st.id);
+    setSelectedStackId(st.id);
+    setActiveId(st.spectrumIds[0]);
+    setSelected([]);
+    setMode("stack");
+    setTab("Stack");
+    setPanel("stack");
+    setInspectorOpen(true);
+    setTool("select");
+    setPreview(null);
+    setFitEnabled(false);
+    setHandAlign(false);
+    const s = spectra.find((s) => s.id === st.spectrumIds[0]);
+    if (s) setView(extent(s.data, s.referenceOffset));
+  }
+  function shiftMember(id: string, delta: number) {
+    if (busy) return;
+    commit(spectra.map((s) => (s.id === id ? shiftSpectrum(s, delta) : s)));
+    setActiveId(id);
+    setSelected([id]);
+    setFitEnabled(false);
+  }
+  function alignMembers() {
+    if (!activeStack) return;
+    try {
+      const updates = new Map(
+        stackMembers.map((s) => [
+          s.id,
+          shiftSpectrum(
+            s,
+            alignTarget - strongestPosition(s, alignFrom, alignTo),
+          ),
+        ]),
+      );
+      commit(spectra.map((s) => updates.get(s.id) ?? s));
+      setFitEnabled(false);
+      notify(
+        `Aligned ${updates.size} spectra to ${alignTarget.toFixed(4)} ppm`,
+      );
+    } catch (e) {
+      notify(err(e));
+    }
+  }
+  function resizePanel(
+    e: React.PointerEvent,
+    which: "navigator" | "inspector" | "results" | "ribbon",
+  ) {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const start =
+      which === "navigator" || which === "inspector" ? e.clientX : e.clientY;
+    const value =
+      which === "navigator"
+        ? navigatorWidth
+        : which === "inspector"
+          ? inspectorWidth
+          : which === "results"
+            ? resultsHeight
+            : ribbonHeight;
+    const move = (ev: PointerEvent) => {
+      const delta =
+        (which === "navigator" || which === "inspector"
+          ? ev.clientX
+          : ev.clientY) - start;
+      const next =
+        value + delta * (which === "inspector" || which === "results" ? -1 : 1);
+      if (which === "navigator")
+        setNavigatorWidth(Math.max(145, Math.min(440, next)));
+      else if (which === "inspector")
+        setInspectorWidth(Math.max(220, Math.min(520, next)));
+      else if (which === "results")
+        setResultsHeight(
+          Math.max(100, Math.min(window.innerHeight * 0.55, next)),
+        );
+      else setRibbonHeight(Math.max(76, Math.min(170, next)));
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up, { once: true });
+  }
+  function applyProperties(
+    p: SpectrumProperties,
+    label: string,
+    color: string,
+    metadata: Spectrum["metadata"],
+    all: boolean,
+  ) {
+    if (!active || busy) return;
+    const ids = all && activeStack ? activeStack.spectrumIds : [active.id];
+    commit(
+      spectra.map((s) =>
+        ids.includes(s.id)
+          ? {
+              ...s,
+              properties: p,
+              ...(s.id === active.id ? { label, color, metadata } : {}),
+            }
+          : s,
+      ),
+    );
+    notify("Spectrum properties applied");
+  }
+  function exportKinetics() {
+    exportKineticsCSV(kineticsPoints, fitResult.fit ?? undefined, {
+      measurements: kineticMeasurements,
+      options: kineticOptions,
+      stackLabel: activeStack?.label,
+    });
+  }
   function enterTab(t: Tab) {
     if (busy) return;
     setTab(t);
     if (t === "Stack") {
       setPanel("stack");
-      setMode("stack");
+      if (activeStack) setMode("stack");
     }
     if (t === "Export") setPanel("export");
     if (t === "Processing") {
@@ -988,23 +1353,53 @@ export default function App() {
   }
   const measurementSignature = spectra
     .map((s) =>
-      [s.id, s.revision, s.referenceOffset, s.timeMinutes, s.nucleus].join(":"),
+      [
+        s.id,
+        s.revision,
+        s.referenceOffset,
+        s.timeMinutes,
+        s.nucleus,
+        s.label,
+      ].join(":"),
     )
     .join("|");
+  const kineticOptions = useMemo(
+    () => ({
+      from: kinFrom,
+      to: kinTo,
+      mode: kinMode,
+      standardFrom: stdFrom,
+      standardTo: stdTo,
+      targetProtons,
+      standardProtons: stdProtons,
+      standardConcentration: stdConcentration,
+      concentrationUnit,
+      excludedIds: excluded,
+      spectrumIds: activeStack?.spectrumIds,
+      nucleus: active?.nucleus,
+    }),
+    [
+      kinFrom,
+      kinTo,
+      kinMode,
+      stdFrom,
+      stdTo,
+      targetProtons,
+      stdProtons,
+      stdConcentration,
+      concentrationUnit,
+      excluded,
+      activeStack,
+      active?.nucleus,
+    ],
+  );
+  const kineticMeasurements = useMemo(
+    () => measureKinetics(spectra, kineticOptions),
+    [measurementSignature, kineticOptions],
+  );
   const kineticsPoints: KineticPoint[] = useMemo(
-    () =>
-      spectra
-        .filter(
-          (s) => s.timeMinutes !== undefined && s.nucleus === active?.nucleus,
-        )
-        .map((s) => ({
-          id: s.id,
-          time: s.timeMinutes!,
-          value: integrate(s.data, s.referenceOffset, kinFrom, kinTo),
-          included: !excluded.includes(s.id),
-        }))
-        .sort((a, b) => a.time - b.time),
-    [measurementSignature, active?.nucleus, kinFrom, kinTo, excluded],
+    () => measuredPoints(kineticMeasurements),
+    [kineticMeasurements],
   );
   const fitResult = useMemo(() => {
     if (!fitEnabled) return { fit: null, error: "" };
@@ -1048,11 +1443,14 @@ export default function App() {
       }
       if (e.key === "Escape") {
         e.preventDefault();
-        if (help) setHelp(false);
+        if (propertiesOpen) setPropertiesOpen(false);
+        else if (contextMenu) setContextMenu(null);
+        else if (help) setHelp(false);
         else cancelPreview();
         return;
       }
-      if (busy) return;
+      if (busy || propertiesOpen) return;
+      if (baselineOpen && k !== "b") return;
       if (e.shiftKey && k === "p") {
         e.preventDefault();
         enterTab("Processing");
@@ -1104,6 +1502,9 @@ export default function App() {
       if (k === "z") {
         e.preventDefault();
         toolMode("zoom");
+      } else if (k === "b") {
+        e.preventDefault();
+        openBaseline();
       } else if (k === "i") {
         e.preventDefault();
         toolMode("integral", "integral");
@@ -1144,6 +1545,10 @@ export default function App() {
     selected,
     draft,
     scope,
+    baselineOpen,
+    propertiesOpen,
+    contextMenu,
+    activeStack,
   ]);
   const processActions = (
     <>
@@ -1189,13 +1594,9 @@ export default function App() {
       <div className="ribbon-group">
         <RibbonButton
           icon={Sparkles}
-          label="Auto baseline"
-          onClick={() => {
-            const r = { ...draft, baseline: "auto" as const };
-            setDraft(r);
-            setPanel("baseline");
-            void process("preview", r);
-          }}
+          label="Baseline correction"
+          shortcut="B"
+          onClick={() => openBaseline()}
           disabled={!active || !!busy}
         />
         <RibbonButton
@@ -1309,6 +1710,18 @@ export default function App() {
         if (!e.currentTarget.contains(e.relatedTarget as Node))
           setDragOver(false);
       }}
+      onPointerDown={(e) => {
+        const el = e.target as HTMLElement;
+        if (
+          !el.closest(
+            ".spectrum-card,.context-menu,.modal,.baseline-dialog,input,button,select,.resizer,.spectrum-plot",
+          )
+        ) {
+          setSelected([]);
+          setSelectedStackId(null);
+        }
+        if (!el.closest(".context-menu")) setContextMenu(null);
+      }}
       onDrop={(e) => {
         e.preventDefault();
         setDragOver(false);
@@ -1375,7 +1788,11 @@ export default function App() {
           </button>
         </div>
       </header>
-      <div className="ribbon" inert={busy ? true : undefined}>
+      <div
+        className="ribbon"
+        style={{ height: ribbonHeight }}
+        inert={busy ? true : undefined}
+      >
         <div className="ribbon-group file-group">
           <RibbonButton
             icon={FolderOpen}
@@ -1402,9 +1819,9 @@ export default function App() {
             <div className="ribbon-group">
               <RibbonButton
                 icon={Layers}
-                label="Stacked"
-                active={mode === "stack"}
-                onClick={() => setMode("stack")}
+                label="Stack selected"
+                disabled={selected.length < 2}
+                onClick={createStack}
               />
               <RibbonButton
                 icon={Waves}
@@ -1418,7 +1835,34 @@ export default function App() {
                 active={mode === "single"}
                 onClick={() => setMode("single")}
               />
-              <span className="group-label">Display</span>
+              <span className="group-label">Stack</span>
+            </div>
+            <div className="ribbon-group">
+              <RibbonButton
+                icon={BarChart3}
+                label="Mass integral"
+                onClick={() => {
+                  setMassIntegral(true);
+                  toolMode("integral", "integral");
+                }}
+                disabled={!activeStack}
+              />
+              <RibbonButton
+                icon={ListFilter}
+                label="Align spectra"
+                onClick={() => {
+                  setPanel("stack");
+                  setInspectorOpen(true);
+                }}
+                disabled={!activeStack}
+              />
+              <RibbonButton
+                icon={Activity}
+                label="Kinetics"
+                onClick={() => enterTab("Kinetics")}
+                disabled={!activeStack}
+              />
+              <span className="group-label">Analysis</span>
             </div>
             <div className="ribbon-group">
               <RibbonButton
@@ -1494,9 +1938,7 @@ export default function App() {
               <RibbonButton
                 icon={Download}
                 label="Export kinetics"
-                onClick={() =>
-                  exportKineticsCSV(kineticsPoints, fitResult.fit ?? undefined)
-                }
+                onClick={() => exportKinetics()}
               />
               <span className="group-label">Analysis</span>
             </div>
@@ -1565,6 +2007,11 @@ export default function App() {
                 onClick={() => {
                   const d = createDemoSpectra();
                   setSpectra(d);
+                  setStacks([]);
+                  setActiveStackId(null);
+                  setSelectedStackId(null);
+                  setSelected([]);
+                  setBaselineOpen(false);
                   undoRef.current = [];
                   redoRef.current = [];
                   setHistoryVersion((n) => n + 1);
@@ -1666,6 +2113,12 @@ export default function App() {
           <span>Undo / redo</span>
         </div>
       </div>
+      <div
+        className="resizer horizontal ribbon-resizer"
+        role="separator"
+        aria-label="Resize ribbon"
+        onPointerDown={(e) => resizePanel(e, "ribbon")}
+      />
       <div className="documentbar">
         <button
           className="icon-button"
@@ -1701,7 +2154,11 @@ export default function App() {
       </div>
       <div className="workbench">
         {navigatorOpen && (
-          <aside className="navigator" inert={busy ? true : undefined}>
+          <aside
+            className="navigator"
+            style={{ width: navigatorWidth, minWidth: navigatorWidth }}
+            inert={busy ? true : undefined}
+          >
             <div className="panel-header">
               <span>Spectra</span>
               <button
@@ -1721,17 +2178,98 @@ export default function App() {
                 onChange={(e) => setFilter(e.target.value)}
               />
             </label>
-            <div className="spectrum-list">
-              {visibleSpectra.map((s, i) => (
+            <div className="navigator-selection-bar">
+              <span>
+                {selected.length
+                  ? `${selected.length} selected`
+                  : "Shift-click to select"}
+              </span>
+              <button
+                title="Create a stack from selected spectra"
+                disabled={selected.length < 2}
+                onClick={createStack}
+              >
+                <Layers size={13} />
+                Stack
+              </button>
+            </div>
+            <div
+              ref={navigatorList}
+              className="spectrum-list"
+              onPointerDown={(e) => {
+                if (e.target === e.currentTarget) {
+                  setSelected([]);
+                  setSelectedStackId(null);
+                }
+              }}
+            >
+              {stacks.map((st) => (
                 <div
-                  key={s.id}
-                  className={`spectrum-card ${s.id === active?.id ? "active" : ""} ${selected.includes(s.id) ? "multi-selected" : ""}`}
+                  key={st.id}
+                  className={`spectrum-card stack-card ${selectedStackId === st.id ? "multi-selected" : ""}`}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    if (busy) return;
+                    openStack(st);
+                    setContextMenu({ x: e.clientX, y: e.clientY });
+                  }}
                 >
                   <button
                     className="spectrum-select"
-                    title="Click to activate; Ctrl/Cmd-click to select for batch processing"
+                    onClick={() => openStack(st)}
+                  >
+                    <div className="card-caption">
+                      <Layers size={14} />
+                      <span>{st.label}</span>
+                    </div>
+                    <div className="stack-thumbnail">
+                      {st.spectrumIds.slice(0, 4).map((id) => {
+                        const sp = spectra.find((s) => s.id === id);
+                        return sp ? <MiniTrace key={id} spectrum={sp} /> : null;
+                      })}
+                    </div>
+                    <div className="card-meta">
+                      <span>NMR stack</span>
+                      <span>{st.spectrumIds.length} spectra</span>
+                    </div>
+                  </button>
+                  <div className="card-actions">
+                    <button
+                      className="icon-button"
+                      aria-label={`Remove ${st.label}`}
+                      onClick={() => {
+                        commit(
+                          spectra,
+                          stacks.filter((s) => s.id !== st.id),
+                        );
+                        if (activeStackId === st.id) {
+                          setActiveStackId(null);
+                          setSelectedStackId(null);
+                          setMode("single");
+                        }
+                      }}
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {visibleSpectra.map((s, i) => (
+                <div
+                  key={s.id}
+                  className={`spectrum-card ${selected.includes(s.id) ? "multi-selected" : ""}`}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    if (busy) return;
+                    selectSpectrum(s.id);
+                    setContextMenu({ x: e.clientX, y: e.clientY });
+                  }}
+                >
+                  <button
+                    className="spectrum-select"
+                    title="Click to select; Shift-click for a range; Ctrl/Cmd-click to toggle"
                     onClick={(e) =>
-                      selectSpectrum(s.id, e.ctrlKey || e.metaKey)
+                      selectSpectrum(s.id, e.ctrlKey || e.metaKey, e.shiftKey)
                     }
                   >
                     <div className="card-caption">
@@ -1756,12 +2294,6 @@ export default function App() {
                     </div>
                   </button>
                   <div className="card-actions">
-                    <input
-                      type="checkbox"
-                      aria-label={`Select ${s.label}`}
-                      checked={selected.includes(s.id)}
-                      onChange={() => selectSpectrum(s.id, true)}
-                    />
                     <button
                       className="icon-button"
                       aria-label={`${s.visible ? "Hide" : "Show"} ${s.label}`}
@@ -1797,14 +2329,41 @@ export default function App() {
             </div>
           </aside>
         )}
+        {navigatorOpen && (
+          <div
+            className="resizer vertical navigator-resizer"
+            role="separator"
+            aria-label="Resize spectra navigator"
+            onPointerDown={(e) => resizePanel(e, "navigator")}
+          />
+        )}
         <main className="workspace">
           <div className="workspace-toolbar">
             <div className="breadcrumbs">
               <span>{isDemo ? "Example project" : projectName}</span>
               <ChevronRight size={12} />
-              <strong>{active?.label ?? "No spectrum"}</strong>
+              <strong>
+                {activeStack
+                  ? `${activeStack.label} · ${active?.label}`
+                  : (active?.label ?? "No spectrum")}
+              </strong>
             </div>
             <div className="view-options">
+              {activeStack && (
+                <select
+                  aria-label="Active stack member"
+                  value={active?.id}
+                  onChange={(e) =>
+                    selectSpectrum(e.target.value, false, false, true)
+                  }
+                >
+                  {stackMembers.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+              )}
               <select
                 aria-label="Spectrum component"
                 value={component}
@@ -1853,17 +2412,13 @@ export default function App() {
                 <div>
                   <span className="eyebrow">REACTION MONITORING</span>
                   <h1>Kinetics</h1>
-                  <p>Measure the same signal across your time series.</p>
+                  <p>
+                    {activeStack
+                      ? `${activeStack.label} · ${stackMembers.length} spectra`
+                      : "Measure the same signal across your time series."}
+                  </p>
                 </div>
-                <button
-                  className="secondary"
-                  onClick={() =>
-                    exportKineticsCSV(
-                      kineticsPoints,
-                      fitResult.fit ?? undefined,
-                    )
-                  }
-                >
+                <button className="secondary" onClick={() => exportKinetics()}>
                   <Download size={15} />
                   Export data
                 </button>
@@ -1903,7 +2458,112 @@ export default function App() {
                   <Activity size={16} /> Fit curve
                 </button>
               </div>
-              <KineticsChart points={kineticsPoints} fit={fitResult.fit} />
+              <div className="kinetics-controls internal-standard-controls">
+                <Field label="Comparison">
+                  <select
+                    value={kinMode}
+                    onChange={(e) => {
+                      setKinMode(e.target.value as typeof kinMode);
+                      setFitEnabled(false);
+                    }}
+                  >
+                    <option value="area">Raw signal area</option>
+                    <option value="ratio">Internal standard ratio</option>
+                    <option value="concentration">
+                      Internal standard concentration
+                    </option>
+                  </select>
+                </Field>
+                {kinMode !== "area" && (
+                  <>
+                    <NumberField
+                      label="Standard from (ppm)"
+                      value={stdFrom}
+                      onChange={setStdFrom}
+                      step={0.01}
+                    />
+                    <NumberField
+                      label="Standard to (ppm)"
+                      value={stdTo}
+                      onChange={setStdTo}
+                      step={0.01}
+                    />
+                    <NumberField
+                      label="Target proton count"
+                      value={targetProtons}
+                      min={1}
+                      onChange={(n) => setTargetProtons(Math.max(1, n))}
+                      step={1}
+                    />
+                    <NumberField
+                      label="Standard proton count"
+                      value={stdProtons}
+                      min={1}
+                      onChange={(n) => setStdProtons(Math.max(1, n))}
+                      step={1}
+                    />
+                  </>
+                )}
+                {kinMode === "concentration" && (
+                  <>
+                    <NumberField
+                      label="Standard concentration"
+                      value={stdConcentration}
+                      min={0.000001}
+                      onChange={(n) =>
+                        setStdConcentration(Math.max(0.000001, n))
+                      }
+                    />
+                    <Field label="Units">
+                      <select
+                        value={concentrationUnit}
+                        onChange={(e) => setConcentrationUnit(e.target.value)}
+                      >
+                        <option>mM</option>
+                        <option>M</option>
+                        <option>µM</option>
+                      </select>
+                    </Field>
+                  </>
+                )}
+              </div>
+              {activeStack && (
+                <Field label="Shared integral region">
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      const i = active?.integrals.find(
+                        (i) => i.id === e.target.value,
+                      );
+                      if (i) {
+                        setKinFrom(i.from);
+                        setKinTo(i.to);
+                        setFitEnabled(false);
+                      }
+                    }}
+                  >
+                    <option value="">
+                      Choose an integral from this stack…
+                    </option>
+                    {active?.integrals.map((i) => (
+                      <option key={i.id} value={i.id}>
+                        {i.label} · {fmt(i.from)}–{fmt(i.to)} ppm
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              )}
+              <KineticsChart
+                points={kineticsPoints}
+                fit={fitResult.fit}
+                label={
+                  kinMode === "area"
+                    ? "Integrated area"
+                    : kinMode === "ratio"
+                      ? "Internal standard ratio"
+                      : `Concentration (${concentrationUnit})`
+                }
+              />
               {fitResult.error && (
                 <p className="inline-warning">{fitResult.error}</p>
               )}
@@ -1948,20 +2608,38 @@ export default function App() {
                       <th>Include</th>
                       <th>Spectrum</th>
                       <th>Time (min)</th>
-                      <th>Raw area</th>
+                      <th>Target area</th>
+                      <th>Standard area</th>
+                      <th>
+                        {kinMode === "area"
+                          ? "Measurement"
+                          : kinMode === "ratio"
+                            ? "Ratio"
+                            : `Concentration (${concentrationUnit})`}
+                      </th>
+                      <th>Status</th>
                       <th>Residual</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {spectra.map((s) => {
+                    {(activeStack
+                      ? stackMembers
+                      : spectra.filter((s) => s.nucleus === active?.nucleus)
+                    ).map((s) => {
                       const p = kineticsPoints.find((v) => v.id === s.id);
+                      const measurement = kineticMeasurements.find(
+                        (m) => m.id === s.id,
+                      );
                       return (
                         <tr key={s.id}>
                           <td>
                             <input
                               type="checkbox"
                               aria-label={`Include ${s.label} in fit`}
-                              checked={!excluded.includes(s.id)}
+                              disabled={!!measurement?.error}
+                              checked={
+                                !excluded.includes(s.id) && !measurement?.error
+                              }
                               onChange={() =>
                                 setExcluded((a) =>
                                   a.includes(s.id)
@@ -1997,7 +2675,15 @@ export default function App() {
                             />
                           </td>
                           <td>
-                            {p ? p.value.toPrecision(6) : "Set time to measure"}
+                            {measurement?.targetArea?.toPrecision(6) ?? "—"}
+                          </td>
+                          <td>
+                            {measurement?.standardArea?.toPrecision(6) ?? "—"}
+                          </td>
+                          <td>{measurement?.value?.toPrecision(6) ?? "—"}</td>
+                          <td className="measurement-status">
+                            {measurement?.error ??
+                              (measurement?.included ? "Included" : "Excluded")}
                           </td>
                           <td>
                             {fitResult.fit && p
@@ -2018,7 +2704,19 @@ export default function App() {
             </div>
           ) : active && displayedActive ? (
             <div className="page-stage">
-              <div className="spectrum-page">
+              <div
+                className="spectrum-page"
+                style={{
+                  width: `${activeProperties.paperWidth}%`,
+                  height: `${activeProperties.paperHeight}%`,
+                  transform: `translate(${activeProperties.paperX}px,${activeProperties.paperY}px)`,
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  if (busy) return;
+                  setContextMenu({ x: e.clientX, y: e.clientY });
+                }}
+              >
                 <SpectrumPlot
                   spectra={plottedSpectra}
                   active={displayedActive}
@@ -2036,7 +2734,18 @@ export default function App() {
                   onCursor={setCursor}
                   onZoom={zoom}
                   onGain={gain}
-                  onSelect={selectSpectrum}
+                  onSelect={(id, multi) =>
+                    selectSpectrum(id, multi, false, !!activeStack)
+                  }
+                  onDeselect={() => {
+                    setSelected([]);
+                    setSelectedStackId(null);
+                  }}
+                  selected={selected}
+                  properties={activeProperties}
+                  baseline={baselineOpen ? baselineCurve : null}
+                  handAlign={handAlign && !!activeStack}
+                  onShift={shiftMember}
                   onFit={full}
                   exportRef={svgExport}
                 />
@@ -2074,7 +2783,22 @@ export default function App() {
             </div>
           )}
           {tab !== "Kinetics" && (
-            <div className={`results-panel ${!tableOpen ? "collapsed" : ""}`}>
+            <div
+              className={`results-panel ${!tableOpen ? "collapsed" : ""}`}
+              style={
+                tableOpen
+                  ? { height: resultsHeight, minHeight: resultsHeight }
+                  : undefined
+              }
+            >
+              {tableOpen && (
+                <div
+                  className="resizer horizontal results-resizer"
+                  role="separator"
+                  aria-label="Resize results table"
+                  onPointerDown={(e) => resizePanel(e, "results")}
+                />
+              )}
               <div className="results-tabs">
                 {(
                   [
@@ -2486,7 +3210,17 @@ export default function App() {
           </div>
         )}
         {inspectorOpen && (
-          <aside className="inspector" inert={busy ? true : undefined}>
+          <aside
+            className="inspector"
+            style={{ width: inspectorWidth, minWidth: inspectorWidth }}
+            inert={busy ? true : undefined}
+          >
+            <div
+              className="resizer vertical inspector-resizer"
+              role="separator"
+              aria-label="Resize inspector"
+              onPointerDown={(e) => resizePanel(e, "inspector")}
+            />
             <div className="panel-header">
               <span>
                 {panel === "overview"
@@ -2654,7 +3388,8 @@ export default function App() {
                           Selected spectra ({selected.length})
                         </option>
                         <option value="all">
-                          Entire stack ({spectra.length})
+                          {activeStack ? "Entire stack" : "All spectra"} (
+                          {activeStack ? stackMembers.length : spectra.length})
                         </option>
                       </select>
                     </Field>
@@ -2833,50 +3568,22 @@ export default function App() {
                     ) : (
                       <>
                         <p className="panel-description">
-                          Automatic correction estimates a smooth baseline.
-                          Manual correction interpolates between points you
-                          click.
+                          Press B to choose a baseline method. The blue curve
+                          previews the fitted baseline on the uncorrected
+                          spectrum.
                         </p>
-                        <Field label="Method">
-                          <select
-                            value={draft.baseline}
-                            onChange={(e) => {
-                              const b = e.target
-                                .value as ProcessingRecipe["baseline"];
-                              setDraft((d) => ({ ...d, baseline: b }));
-                              if (b === "manual") manualBaseline();
-                            }}
-                          >
-                            <option value="none">None</option>
-                            <option value="auto">
-                              Automatic smooth baseline
-                            </option>
-                            <option value="manual">Manual anchor points</option>
-                          </select>
-                        </Field>
-                        {draft.baseline === "manual" && (
-                          <>
-                            <button
-                              className="secondary full-width"
-                              onClick={manualBaseline}
-                            >
-                              <MousePointer2 size={14} />
-                              Place baseline points
-                            </button>
-                            <p className="muted-small">
-                              {draft.baselineAnchors.length} anchors · at least
-                              2 recommended
-                            </p>
-                            <button
-                              className="text-button"
-                              onClick={() =>
-                                setDraft((d) => ({ ...d, baselineAnchors: [] }))
-                              }
-                            >
-                              Clear anchors
-                            </button>
-                          </>
-                        )}
+                        <button
+                          className="primary full-width"
+                          onClick={() => openBaseline()}
+                        >
+                          Baseline correction · B
+                        </button>
+                        <button
+                          className="secondary full-width"
+                          onClick={manualBaseline}
+                        >
+                          Manual baseline points
+                        </button>
                       </>
                     )}
                     <div className="processing-buttons">
@@ -3002,6 +3709,16 @@ export default function App() {
                   </>
                 ) : panel === "integral" || panel === "multiplet" ? (
                   <>
+                    {panel === "integral" && activeStack && (
+                      <label className="check-field">
+                        <input
+                          type="checkbox"
+                          checked={massIntegral}
+                          onChange={(e) => setMassIntegral(e.target.checked)}
+                        />
+                        Integrate all {stackMembers.length} stack members
+                      </label>
+                    )}
                     <p className="panel-description">
                       {panel === "integral"
                         ? "Drag across a signal to integrate it, or enter exact region limits."
@@ -3078,6 +3795,131 @@ export default function App() {
                   </>
                 ) : panel === "stack" ? (
                   <>
+                    {!activeStack ? (
+                      <p className="panel-description">
+                        Shift-click the spectra you want in the navigator, then
+                        click Stack selected.
+                      </p>
+                    ) : (
+                      <>
+                        <Field label="Stack name">
+                          <input
+                            value={activeStack.label}
+                            onChange={(e) =>
+                              setStacks((a) =>
+                                a.map((st) =>
+                                  st.id === activeStack.id
+                                    ? { ...st, label: e.target.value }
+                                    : st,
+                                ),
+                              )
+                            }
+                          />
+                        </Field>
+                        <Field label="Active member">
+                          <select
+                            value={active?.id}
+                            onChange={(e) =>
+                              selectSpectrum(e.target.value, false, false, true)
+                            }
+                          >
+                            {stackMembers.map((s) => (
+                              <option value={s.id} key={s.id}>
+                                {s.label}
+                              </option>
+                            ))}
+                          </select>
+                        </Field>
+                        <button
+                          className="secondary full-width"
+                          onClick={() => {
+                            setMassIntegral(true);
+                            toolMode("integral", "integral");
+                          }}
+                        >
+                          Mass integral across stack
+                        </button>
+                        <div className="section-title">Align spectra</div>
+                        <div className="two-fields">
+                          <NumberField
+                            label="Reference from (ppm)"
+                            value={alignFrom}
+                            onChange={setAlignFrom}
+                            step={0.01}
+                          />
+                          <NumberField
+                            label="Reference to (ppm)"
+                            value={alignTo}
+                            onChange={setAlignTo}
+                            step={0.01}
+                          />
+                        </div>
+                        <NumberField
+                          label="Reference target (ppm)"
+                          value={alignTarget}
+                          onChange={setAlignTarget}
+                          step={0.001}
+                        />
+                        <button
+                          className="primary full-width"
+                          onClick={alignMembers}
+                        >
+                          Align all to reference peak
+                        </button>
+                        <button
+                          className="secondary full-width"
+                          onClick={() => {
+                            try {
+                              const ref =
+                                stackMembers.find(
+                                  (s) => s.id === activeStack.referenceId,
+                                ) ?? stackMembers[0];
+                              setAlignTarget(
+                                strongestPosition(ref, alignFrom, alignTo),
+                              );
+                              notify(
+                                "Reference position copied. Click Align all to apply.",
+                              );
+                            } catch (e) {
+                              notify(err(e));
+                            }
+                          }}
+                        >
+                          Use first spectrum as reference
+                        </button>
+                        <NumberField
+                          label="Move active spectrum by (ppm)"
+                          value={shiftValue}
+                          onChange={setShiftValue}
+                          step={0.001}
+                        />
+                        <button
+                          className="secondary full-width"
+                          onClick={() =>
+                            active && shiftMember(active.id, shiftValue)
+                          }
+                        >
+                          Apply ppm shift
+                        </button>
+                        <label className="check-field">
+                          <input
+                            type="checkbox"
+                            checked={handAlign}
+                            onChange={(e) => {
+                              setHandAlign(e.target.checked);
+                              setTool("select");
+                            }}
+                          />
+                          Drag individual spectra horizontally
+                        </label>
+                        <button
+                          className="secondary full-width"
+                          onClick={() => enterTab("Kinetics")}
+                        >
+                          Use this stack in kinetics
+                        </button>
+                      </>
+                    )}
                     <Field label="Display mode">
                       <select
                         value={mode}
@@ -3383,6 +4225,103 @@ export default function App() {
           </div>
         </div>
       )}
+      {contextMenu && (
+        <div
+          className="context-menu"
+          role="menu"
+          style={{
+            left: Math.max(8, Math.min(window.innerWidth - 190, contextMenu.x)),
+            top: Math.max(8, Math.min(window.innerHeight - 230, contextMenu.y)),
+          }}
+        >
+          <button
+            role="menuitem"
+            onClick={() => {
+              setPropertiesOpen(true);
+              setContextMenu(null);
+            }}
+          >
+            Properties…
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              openBaseline();
+              setContextMenu(null);
+            }}
+          >
+            Baseline correction… <kbd>B</kbd>
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              full();
+              setContextMenu(null);
+            }}
+          >
+            Full spectrum
+          </button>
+          <button
+            role="menuitem"
+            disabled={selected.length < 2}
+            onClick={() => {
+              createStack();
+              setContextMenu(null);
+            }}
+          >
+            Stack selected spectra
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              duplicate();
+              setContextMenu(null);
+            }}
+          >
+            Duplicate spectrum
+          </button>
+        </div>
+      )}
+      {propertiesOpen && active && (
+        <PropertiesDialog
+          spectrum={active}
+          initial={activeProperties}
+          stack={!!activeStack}
+          onApply={applyProperties}
+          onClose={() => setPropertiesOpen(false)}
+          onDefault={(p) => {
+            setProperties(p);
+            notify("Default spectrum properties updated");
+          }}
+        />
+      )}
+      {baselineOpen && active && (
+        <BaselineDialog
+          draft={draft}
+          onChange={setDraft}
+          view={view}
+          loading={baselineLoading}
+          error={baselineError}
+          scope={scope}
+          onScope={setScope}
+          selectedCount={selected.length}
+          stackCount={activeStack ? stackMembers.length : spectra.length}
+          onApply={() => void process("apply")}
+          onClose={cancelPreview}
+          onManual={() => setTool("baseline")}
+          onExtract={() => {
+            if (baselineCurve)
+              exportSpectrumCSV({
+                ...active,
+                label: active.label + " baseline model",
+                data: baselineCurve,
+                peaks: [],
+                integrals: [],
+                multiplets: [],
+              });
+          }}
+        />
+      )}
       {help && (
         <div className="modal-backdrop" onClick={() => setHelp(false)}>
           <div
@@ -3415,6 +4354,8 @@ export default function App() {
                 ["⌘ / Ctrl + K", "Peak by peak"],
                 ["L / R", "Reference signal"],
                 ["Shift + P", "Manual phase correction"],
+                ["B", "Baseline correction dialog"],
+                ["Shift + click", "Select spectra range"],
                 ["Shift + I", "Integral manager"],
                 ["Shift + J", "Multiplet manager"],
                 ["+ / −", "Increase / decrease height"],

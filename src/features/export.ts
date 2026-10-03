@@ -1,4 +1,8 @@
 import type { KineticFit, KineticPoint, Spectrum } from "../model";
+import type {
+  KineticMeasurement,
+  KineticsMeasurementOptions,
+} from "./kinetics";
 import { downloadBlob, safeFilename } from "./project";
 
 /** Quoting alone does not neutralize spreadsheet formulas; guard string cells explicitly. */
@@ -121,7 +125,9 @@ export function spectrumJCAMP(s: Spectrum): string {
     `##LASTX=${x[x.length - 1] + s.referenceOffset}`,
     `##NPOINTS=${x.length}`,
     ...(s.frequencyMHz > 0 ? [`##.OBSERVE FREQUENCY=${s.frequencyMHz}`] : []),
-    ...(/^\^?\d+[A-Za-z]+$/.test(s.nucleus) ? [`##.OBSERVE NUCLEUS=^${jcampText(s.nucleus.replace(/^\^/, ""))}`] : []),
+    ...(/^\^?\d+[A-Za-z]+$/.test(s.nucleus)
+      ? [`##.OBSERVE NUCLEUS=^${jcampText(s.nucleus.replace(/^\^/, ""))}`]
+      : []),
     "$$ Real processed data; display gain is excluded.",
     "##XYPOINTS=(XY..XY)",
   ];
@@ -166,7 +172,16 @@ export function exportFigureSVG(svgText: string, label: string) {
     `${safeFilename(label)}.svg`,
   );
 }
-export function kineticsCSV(points: KineticPoint[], fit?: KineticFit): string {
+export interface KineticsExportContext {
+  measurements?: KineticMeasurement[];
+  options?: KineticsMeasurementOptions;
+  stackLabel?: string;
+}
+export function kineticsCSV(
+  points: KineticPoint[],
+  fit?: KineticFit,
+  context?: KineticsExportContext,
+): string {
   const rows: (string | number | boolean | undefined)[][] = [
     [
       "spectrum_id",
@@ -177,16 +192,68 @@ export function kineticsCSV(points: KineticPoint[], fit?: KineticFit): string {
       "residual",
     ],
   ];
-  points.forEach((p, i) =>
-    rows.push([
-      p.id,
-      p.time,
-      p.value,
-      p.included,
-      fit?.predicted[i],
-      fit?.residuals[i],
-    ]),
-  );
+  if (context?.measurements) {
+    rows[0].push(
+      "spectrum_label",
+      "target_signed_area",
+      "standard_signed_area",
+      "measurement_mode",
+      "measurement_unit",
+      "measurement_error",
+    );
+    const indices = new Map(points.map((p, i) => [p.id, i]));
+    for (const row of context.measurements) {
+      const index = indices.get(row.id);
+      rows.push([
+        row.id,
+        row.time,
+        row.error ? undefined : row.value,
+        row.included,
+        index === undefined ? undefined : fit?.predicted[index],
+        index === undefined ? undefined : fit?.residuals[index],
+        row.label,
+        row.targetArea,
+        row.standardArea,
+        row.mode,
+        row.unit,
+        row.error,
+      ]);
+    }
+  } else
+    points.forEach((p, i) =>
+      rows.push([
+        p.id,
+        p.time,
+        p.value,
+        p.included,
+        fit?.predicted[i],
+        fit?.residuals[i],
+      ]),
+    );
+  if (context?.stackLabel || context?.options) {
+    rows.push([]);
+    if (context.stackLabel) rows.push(["stack", context.stackLabel]);
+    if (context.options) {
+      const o = context.options;
+      rows.push(
+        ["measurement_mode", o.mode],
+        ["target_from_ppm", o.from],
+        ["target_to_ppm", o.to],
+      );
+      if (o.mode !== "area")
+        rows.push(
+          ["standard_from_ppm", o.standardFrom],
+          ["standard_to_ppm", o.standardTo],
+          ["target_protons", o.targetProtons ?? 1],
+          ["standard_protons", o.standardProtons ?? 1],
+        );
+      if (o.mode === "concentration")
+        rows.push(
+          ["standard_concentration", o.standardConcentration],
+          ["concentration_unit", o.concentrationUnit ?? "mM"],
+        );
+    }
+  }
   if (fit) {
     rows.push(
       [],
@@ -202,6 +269,10 @@ export function kineticsCSV(points: KineticPoint[], fit?: KineticFit): string {
   }
   return makeCSV(rows);
 }
-export function exportKineticsCSV(points: KineticPoint[], fit?: KineticFit) {
-  return csvDownload(kineticsCSV(points, fit), "kinetics.csv");
+export function exportKineticsCSV(
+  points: KineticPoint[],
+  fit?: KineticFit,
+  context?: KineticsExportContext,
+) {
+  return csvDownload(kineticsCSV(points, fit, context), "kinetics.csv");
 }

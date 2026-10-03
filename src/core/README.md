@@ -38,3 +38,11 @@ Multiplets classify only conservative first-order singlets, doublets, triplets a
 `numerics.ts`: `processSpectrum`, `autoPhase`, `detectPeaks(data,offset,thresholdPercent,minDistancePpm,negative?)`, `integrate(data,offset,from,to)`, `analyzeMultiplet(data,offset,from,to,frequencyMHz)`; lower-level `fft`, `applyPhase`, `correctDigitalFilter`, `automaticBaseline`, `nextPowerOfTwo`.
 
 Tests cover an independently computed analytical DFT, calibrated synthetic raw spectra, signed integrals, endpoint interpolation, phase, baselines, conservative multiplicities, and actual supplied Bruker proton/million-point carbon datasets and 2D rejection. Practical auto-processing still requires review on additional vendor datasets.
+
+## Expanded baseline processing
+
+`processWithBaseline(spectrum)` returns the phased, unbaselined `source`, the fitted `baseline`, corrected `data`, and optional joint `effectivePhase`. The same curve is subtracted on Apply and shown in blue in the UI. Preserve input PH0/PH1 in the recipe: joint automatic phase is replayed deterministically from the original source, and writing effective phase back would run it a second time.
+
+Automatic methods are polynomial and Bernstein robust fits, weighted Whittaker smoothing, splines, ablative peak shaving, arPLS and SNIP. PcBc/apbk are clearly labelled independent phase/baseline adaptations; proprietary vendor objectives and neural weights are not reproduced. Their regional/masked mode disables the global phase adjustment to preserve untreated samples. Manual anchors support linear segments, natural splines, polynomial and Whittaker models. Models use a bounded baseline-estimation grid and are interpolated onto the full spectrum.
+
+Optional recipe fields preserve legacy archive replay. Region limits, excluded regions and anchors use referenced ppm and translate together when referencing/alignment changes. Excluded and out-of-region samples are unchanged. The baseline tests cover all methods, repeat replay, selected/excluded regions, known curves, conditioning and million-point data.

@@ -2,8 +2,19 @@ import { describe, expect, it } from "vitest";
 import { unzipSync, zipSync, strToU8, strFromU8 } from "fflate";
 import { defaultRecipe, type Project, type Spectrum } from "../model";
 import { encodeProject, decodeProject } from "./project";
-import { fitKinetics } from "./kinetics";
-import { csvCell, spectrumCSV, analysisCSV, spectrumJCAMP } from "./export";
+import {
+  fitKinetics,
+  measureKinetics,
+  kineticsPoints,
+  type KineticsMeasurementOptions,
+} from "./kinetics";
+import {
+  csvCell,
+  spectrumCSV,
+  analysisCSV,
+  spectrumJCAMP,
+  kineticsCSV,
+} from "./export";
 import { shortcutCommand } from "./shortcuts";
 import { createDemoSpectra } from "./demo";
 
@@ -109,14 +120,165 @@ describe("portable project", () => {
     source.spectra[0].nucleus = "Unknown";
     const result = await decodeProject(await encodeProject(source));
     expect(result.spectra[0].frequencyMHz).toBe(0);
-    expect(spectrumJCAMP(result.spectra[0])).not.toContain("##.OBSERVE FREQUENCY=");
-    expect(spectrumJCAMP(result.spectra[0])).not.toContain("##.OBSERVE NUCLEUS=");
+    expect(spectrumJCAMP(result.spectra[0])).not.toContain(
+      "##.OBSERVE FREQUENCY=",
+    );
+    expect(spectrumJCAMP(result.spectra[0])).not.toContain(
+      "##.OBSERVE NUCLEUS=",
+    );
     expect(spectrumJCAMP(result.spectra[0])).toContain("##XYPOINTS=(XY..XY)");
   });
   it("rejects spectrum colors that could inject markup in figure exports", async () => {
     const source = project();
     source.spectra[0].color = '\"/><script>alert(1)</script>';
     await expect(encodeProject(source)).rejects.toThrow("color");
+  });
+  it("round-trips optional stacks and scalar property settings while preserving old project compatibility", async () => {
+    const source = Object.assign(project(), {
+      stacks: [
+        {
+          id: "stack-a",
+          label: "Reaction",
+          spectrumIds: ["test"],
+          referenceId: "test",
+        },
+      ],
+      activeStackId: "stack-a",
+      properties: {
+        titleText: "My spectrum",
+        gridVertical: true,
+        lineWidth: 1.2,
+      },
+    });
+    const result = (await decodeProject(
+      await encodeProject(source),
+    )) as typeof source;
+    expect(result.stacks).toEqual(source.stacks);
+    expect(result.activeStackId).toBe("stack-a");
+    expect(result.properties).toEqual(source.properties);
+    const old = await decodeProject(await encodeProject(project()));
+    expect(old).not.toHaveProperty("stacks");
+  });
+  it("rejects stale stack membership and nonfinite property settings", async () => {
+    const source = Object.assign(project(), {
+      stacks: [{ id: "stack-a", label: "Reaction", spectrumIds: ["missing"] }],
+      activeStackId: "stack-a",
+    });
+    await expect(encodeProject(source)).rejects.toThrow("missing");
+    source.stacks[0].spectrumIds = ["test"];
+    Object.assign(source, { properties: { lineWidth: NaN } });
+    await expect(encodeProject(source)).rejects.toThrow("properties");
+  });
+  it("preserves extended baseline recipes and rejects unrecognized methods or region shapes", async () => {
+    const source = project();
+    Object.assign(source.spectra[0].recipe, {
+      baselineMethod: "arpls",
+      manualBaselineMethod: "splines",
+      baselineOrder: 3,
+      baselineSmoothness: 4,
+      baselineIterations: 10,
+      baselineRegion: [4, 1],
+      baselineExcludedRegions: [[3.3, 2.8]],
+    });
+    const result = await decodeProject(await encodeProject(source));
+    expect(result.spectra[0].recipe).toEqual(source.spectra[0].recipe);
+    Object.assign(source.spectra[0].recipe, { baselineMethod: "unknown" });
+    await expect(encodeProject(source)).rejects.toThrow("baseline method");
+    Object.assign(source.spectra[0].recipe, {
+      baselineMethod: "arpls",
+      baselineRegion: [3, 3],
+    });
+    await expect(encodeProject(source)).rejects.toThrow("baseline region");
+  });
+});
+describe("internal-standard kinetic measurements", () => {
+  const options: KineticsMeasurementOptions = {
+    from: 4.2,
+    to: 3.2,
+    mode: "ratio",
+    standardFrom: 2.2,
+    standardTo: 1.2,
+    targetProtons: 2,
+    standardProtons: 3,
+  };
+  function spectrum() {
+    const s = project().spectra[0];
+    s.data.real = new Float64Array([2, 2, 1, 1]);
+    return s;
+  }
+  it("corrects target/standard ratios for signal proton counts and known concentration independently of display gains", () => {
+    const s = spectrum(),
+      row = measureKinetics([s], options)[0];
+    expect(row.targetArea).toBeCloseTo(2);
+    expect(row.standardArea).toBeCloseTo(1);
+    expect(row.value).toBeCloseTo(3);
+    s.gain = 100;
+    s.integralScale = 500;
+    expect(measureKinetics([s], options)[0].value).toBeCloseTo(3);
+    const concentration = measureKinetics([s], {
+      ...options,
+      mode: "concentration",
+      standardConcentration: 5,
+      concentrationUnit: "mM",
+    })[0];
+    expect(concentration.value).toBeCloseTo(15);
+    expect(concentration.unit).toBe("mM");
+  });
+  it("reports invalid standards, incomplete regions, and missing times instead of turning them into fit observations", () => {
+    const s = spectrum();
+    s.data.real = new Float64Array([2, 2, 0, 0]);
+    const standard = measureKinetics([s], options)[0];
+    expect(standard.error).toContain("standard area");
+    expect(standard.value).toBeUndefined();
+    expect(kineticsPoints([standard])).toHaveLength(0);
+    const outside = measureKinetics([s], {
+      ...options,
+      mode: "area",
+      from: 10,
+    })[0];
+    expect(outside.error).toContain("outside");
+    const noTime = spectrum();
+    noTime.timeMinutes = undefined;
+    expect(measureKinetics([noTime], options)[0].error).toContain(
+      "acquisition time",
+    );
+    expect(
+      measureKinetics([s], { ...options, standardFrom: 4, standardTo: 3.5 })[0]
+        .error,
+    ).toContain("overlap");
+  });
+  it("filters by stack membership and exports diagnostic rows with ID-matched predictions", () => {
+    const s = spectrum(),
+      ignored = { ...s, id: "other" };
+    const rows = measureKinetics([s, ignored], {
+      ...options,
+      spectrumIds: [s.id],
+      excludedIds: [s.id],
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].included).toBe(false);
+    const csv = kineticsCSV(kineticsPoints(rows), undefined, {
+      measurements: rows,
+      options,
+      stackLabel: "Reaction A",
+    });
+    expect(csv).toContain("target_signed_area");
+    expect(csv).toContain('"measurement_mode","ratio"');
+    expect(csv).toContain('"target_protons",2');
+    expect(csv).toContain('"stack","Reaction A"');
+    const other = {
+      ...s,
+      id: "other",
+      timeMinutes: 0,
+      data: { ...s.data, real: new Float64Array([4, 4, 1, 1]) },
+    };
+    const unordered = measureKinetics([s, other], options),
+      points = kineticsPoints(unordered);
+    expect(points[0].id).toBe("other");
+    const fit = fitKinetics(points, "linear");
+    expect(
+      kineticsCSV(points, fit, { measurements: unordered, options }),
+    ).toContain('"test",15,3,true,3,0');
   });
 });
 describe("kinetic numerical recovery", () => {

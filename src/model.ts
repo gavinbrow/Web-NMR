@@ -1,3 +1,4 @@
+import type { SpectrumProperties } from "./features/appearance";
 export type Tab =
   "File" | "Home" | "Processing" | "Analysis" | "Stack" | "Kinetics" | "Export";
 export type Tool =
@@ -26,6 +27,18 @@ export interface BaselineAnchor {
   ppm: number;
   value: number;
 }
+export type BaselineMethod =
+  | "polynomial"
+  | "bernstein"
+  | "whittaker"
+  | "ablative"
+  | "splines"
+  | "pcbc"
+  | "arpls"
+  | "snip"
+  | "apbk";
+export type ManualBaselineMethod =
+  "segments" | "splines" | "polynomial" | "whittaker";
 export interface ProcessingRecipe {
   transform: boolean;
   digitalFilter: boolean;
@@ -38,6 +51,19 @@ export interface ProcessingRecipe {
   pivotPpm: number;
   baseline: "none" | "auto" | "manual";
   baselineAnchors: BaselineAnchor[];
+  /** Optional fields preserve numerical replay for older project archives. */
+  baselineMethod?: BaselineMethod;
+  manualBaselineMethod?: ManualBaselineMethod;
+  baselineOrder?: number;
+  baselineMedianWindow?: number;
+  /** log10(lambda) on the reduced baseline-estimation grid. */
+  baselineSmoothness?: number;
+  baselineIterations?: number;
+  baselineSnipWindow?: number;
+  baselineRatio?: number;
+  /** Regions and excluded regions are expressed in referenced ppm. */
+  baselineRegion?: [number, number];
+  baselineExcludedRegions?: [number, number][];
 }
 export const defaultRecipe = (): ProcessingRecipe => ({
   transform: false,
@@ -51,6 +77,14 @@ export const defaultRecipe = (): ProcessingRecipe => ({
   pivotPpm: 0,
   baseline: "none",
   baselineAnchors: [],
+  baselineMethod: "bernstein",
+  manualBaselineMethod: "segments",
+  baselineOrder: 3,
+  baselineMedianWindow: 9,
+  baselineSmoothness: 6,
+  baselineIterations: 20,
+  baselineSnipWindow: 40,
+  baselineRatio: 1e-6,
 });
 export interface Peak {
   id: string;
@@ -75,6 +109,7 @@ export interface Multiplet {
   label: string;
 }
 export interface Spectrum {
+  properties?: SpectrumProperties;
   id: string;
   label: string;
   color: string;
@@ -106,6 +141,9 @@ export interface ImportResult {
   warnings: string[];
 }
 export interface Project {
+  stacks?: SpectrumStack[];
+  activeStackId?: string | null;
+  properties?: SpectrumProperties;
   version: 1;
   name: string;
   spectra: Spectrum[];
@@ -114,6 +152,12 @@ export interface Project {
   displayMode: "single" | "stack" | "overlay";
   normalization: "none" | "maximum" | "area";
   savedAt: string;
+}
+export interface SpectrumStack {
+  id: string;
+  label: string;
+  spectrumIds: string[];
+  referenceId?: string;
 }
 export interface KineticPoint {
   id: string;

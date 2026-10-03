@@ -10,6 +10,7 @@ export type ShortcutCommand =
   | "peak"
   | "reference"
   | "graphicReference"
+  | "baseline"
   | "manualPhase"
   | "integralManager"
   | "multipletManager"
@@ -31,6 +32,12 @@ export interface ShortcutDefinition {
 const base = "https://mestrelab.com/downloads/mnova/manuals/latest/";
 /** Verified Mnova 17 standard keys. Mod means Command on macOS, Control otherwise. */
 export const SHORTCUTS: ShortcutDefinition[] = [
+  {
+    id: "baseline",
+    label: "Baseline correction",
+    keys: "B",
+    source: base + "baseline-correction.html",
+  },
   {
     id: "open",
     label: "Open files",
@@ -200,6 +207,7 @@ export function shortcutCommand(
     (
       {
         z: "zoom",
+        b: "baseline",
         i: "integral",
         j: "multiplet",
         k: "peakThreshold",

@@ -73,3 +73,9 @@ export function autoPhaseAsync(
 ): Promise<{ ph0: number; ph1: number }> {
   return request("phase", { spectrum });
 }
+
+export function processBaselineAsync(
+  spectrum: Spectrum,
+): Promise<import("./numerics").BaselineProcessingResult> {
+  return request("processBaseline", { spectrum });
+}
