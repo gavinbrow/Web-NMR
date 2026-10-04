@@ -349,6 +349,58 @@ export function validateProject(value: unknown): asserts value is Project {
     p.activeId === null || ids.has(p.activeId),
     "Active spectrum does not exist.",
   );
+  if (p.kinetics !== undefined) {
+    const k = p.kinetics;
+    assert(
+      k &&
+        typeof k === "object" &&
+        !Array.isArray(k) &&
+        list(k.targets) &&
+        k.targets.length >= 1 &&
+        k.targets.length <= 20,
+      "Invalid kinetic targets.",
+    );
+    const targetIds = new Set<string>();
+    for (const target of k.targets) {
+      assert(
+        target &&
+          text(target.id) &&
+          target.id.length > 0 &&
+          !targetIds.has(target.id) &&
+          text(target.label) &&
+          text(target.color) &&
+          /^#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})$/i.test(
+            target.color,
+          ) &&
+          finite(target.from) &&
+          finite(target.to) &&
+          target.from !== target.to &&
+          finite(target.protons) &&
+          target.protons > 0 &&
+          ["decay", "growth", "linear"].includes(target.model),
+        "Invalid or duplicate kinetic target.",
+      );
+      targetIds.add(target.id);
+    }
+    assert(
+      targetIds.has(k.activeTargetId) &&
+        ["area", "ratio", "concentration"].includes(k.mode) &&
+        ["curve", "spectra"].includes(k.view) &&
+        finite(k.standardFrom) &&
+        finite(k.standardTo) &&
+        k.standardFrom !== k.standardTo &&
+        finite(k.standardProtons) &&
+        k.standardProtons > 0 &&
+        finite(k.standardConcentration) &&
+        k.standardConcentration > 0 &&
+        text(k.concentrationUnit) &&
+        list(k.excludedIds) &&
+        k.excludedIds.length <= 200 &&
+        k.excludedIds.every(text) &&
+        new Set(k.excludedIds).size === k.excludedIds.length,
+      "Invalid kinetic measurement settings.",
+    );
+  }
   const optional = p as Project & { stacks?: unknown; activeStackId?: unknown };
   const stackIds = new Set<string>();
   if (optional.stacks !== undefined) {

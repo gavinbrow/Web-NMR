@@ -47,7 +47,8 @@ import type {
   Tab,
   Project,
   ProcessingRecipe,
-  KineticPoint,
+  KineticTarget,
+  KineticsConfiguration,
 } from "./model";
 import {
   importBrowserFiles,
@@ -60,27 +61,39 @@ import {
   analyzeMultiplet,
   autoMultiplets,
 } from "./core/numerics";
+import { suitableTraceSources } from "./features/twoDTraces";
+import { ProjectTabs } from "./components/ProjectTabs";
+import {
+  createWorkspace,
+  createWorkspaceDocument,
+  createBlankProject,
+  captureDocument,
+  activateDocument,
+  addDocument,
+  closeDocument,
+  reopenDocument,
+  renameDocument,
+  loadWorkspaceRecovery,
+  saveWorkspaceRecovery,
+  clearWorkspaceRecovery,
+  type WorkspaceDocuments,
+  type WorkspaceDocument,
+} from "./features/workspaceDocuments";
 import { createDemoSpectra } from "./features/demo";
 import { droppedFiles } from "./features/dropFiles";
 import {
   downloadProject,
   loadProject,
-  saveRecovery,
-  loadRecovery,
-  clearRecovery,
+  validateProject,
 } from "./features/project";
 import {
   exportSpectrumCSV,
   exportAnalysisCSV,
   exportJCAMP,
   exportFigureSVG,
-  exportKineticsCSV,
+  exportKineticTargetsCSV,
 } from "./features/export";
-import {
-  fitKinetics,
-  measureKinetics,
-  kineticsPoints as measuredPoints,
-} from "./features/kinetics";
+import { measureKineticTargets } from "./features/kinetics";
 import {
   defaultProperties,
   type SpectrumProperties,
@@ -506,7 +519,6 @@ export default function App() {
     ),
     [stdFrom, setStdFrom] = useState(2.15),
     [stdTo, setStdTo] = useState(2),
-    [targetProtons, setTargetProtons] = useState(1),
     [stdProtons, setStdProtons] = useState(1),
     [stdConcentration, setStdConcentration] = useState(1),
     [concentrationUnit, setConcentrationUnit] = useState("mM");
@@ -573,12 +585,96 @@ export default function App() {
   );
   const [kinView, setKinView] = useState<"curve" | "spectra">("curve"),
     [kinSettingsOpen, setKinSettingsOpen] = useState(false);
-  const [kinFrom, setKinFrom] = useState(4.24),
-    [kinTo, setKinTo] = useState(4),
-    [kinModel, setKinModel] = useState<"decay" | "growth" | "linear">("decay"),
-    [excluded, setExcluded] = useState<string[]>([]),
+  const [kinTargets, setKinTargets] = useState<KineticTarget[]>([
+    {
+      id: "target-1",
+      label: "Target 1",
+      color: "#1689e9",
+      from: 4.24,
+      to: 4,
+      protons: 1,
+      model: "decay",
+    },
+  ]);
+  const [kinActiveTargetId, setKinActiveTargetId] = useState("target-1");
+  const kineticTarget =
+    kinTargets.find((t) => t.id === kinActiveTargetId) ?? kinTargets[0];
+  const kinFrom = kineticTarget.from,
+    kinTo = kineticTarget.to,
+    kinModel = kineticTarget.model,
+    targetProtons = kineticTarget.protons;
+  function updateTarget(patch: Partial<KineticTarget>, id = kineticTarget.id) {
+    setKinTargets((all) =>
+      all.map((t) => (t.id === id ? { ...t, ...patch } : t)),
+    );
+    setFitEnabled(false);
+  }
+  const setKinFrom = (from: number) => updateTarget({ from });
+  const setKinTo = (to: number) => updateTarget({ to });
+  const setKinModel = (model: KineticTarget["model"]) =>
+    updateTarget({ model });
+  const setTargetProtons = (protons: number) => updateTarget({ protons });
+  const [excluded, setExcluded] = useState<string[]>([]),
     [fitEnabled, setFitEnabled] = useState(false);
-  const [recovery, setRecovery] = useState<Project | null>(null),
+  function kineticsConfiguration(): KineticsConfiguration {
+    return {
+      targets: kinTargets,
+      activeTargetId: kineticTarget.id,
+      mode: kinMode,
+      standardFrom: stdFrom,
+      standardTo: stdTo,
+      standardProtons: stdProtons,
+      standardConcentration: stdConcentration,
+      concentrationUnit,
+      excludedIds: excluded,
+      view: kinView,
+    };
+  }
+  function restoreKinetics(config?: KineticsConfiguration) {
+    setKinTargets(
+      config?.targets ?? [
+        {
+          id: "target-1",
+          label: "Target 1",
+          color: "#1689e9",
+          from: 4.24,
+          to: 4,
+          protons: 1,
+          model: "decay",
+        },
+      ],
+    );
+    setKinActiveTargetId(config?.activeTargetId ?? "target-1");
+    setKinMode(config?.mode ?? "area");
+    setStdFrom(config?.standardFrom ?? 2.15);
+    setStdTo(config?.standardTo ?? 2);
+    setStdProtons(config?.standardProtons ?? 1);
+    setStdConcentration(config?.standardConcentration ?? 1);
+    setConcentrationUnit(config?.concentrationUnit ?? "mM");
+    setExcluded(config?.excludedIds ?? []);
+    setKinView(config?.view ?? "curve");
+    setKinPicking(null);
+    setKinSettingsOpen(false);
+    setFitEnabled(false);
+  }
+  function addKineticTarget() {
+    if (kinTargets.length >= 20) return;
+    const n = kinTargets.length;
+    const target: KineticTarget = {
+      id: uid(),
+      label: `Target ${n + 1}`,
+      color: ["#1689e9", "#e27b25", "#9263b6", "#c73b63", "#1d9a9a"][n % 5],
+      from: kinFrom,
+      to: kinTo,
+      protons: 1,
+      model: kinModel,
+    };
+    setKinTargets((all) => [...all, target]);
+    setKinActiveTargetId(target.id);
+    setFitEnabled(false);
+    pickKineticRegion("target");
+  }
+  const [recovery, setRecovery] = useState<WorkspaceDocuments | null>(null),
     [ready, setReady] = useState(false),
     [saveState, setSaveState] = useState("Local workspace");
   const undoRef = useRef<WorkspaceSnapshot[]>([]),
@@ -589,6 +685,7 @@ export default function App() {
     fileInput = useRef<HTMLInputElement>(null),
     folderInput = useRef<HTMLInputElement>(null),
     projectInput = useRef<HTMLInputElement>(null),
+    traceInput = useRef<HTMLInputElement>(null),
     svgExport = useRef<(() => string) | null>(null),
     twoDFull = useRef<(() => void) | null>(null),
     twoDIntensity = useRef<((factor: number) => void) | null>(null),
@@ -631,6 +728,7 @@ export default function App() {
   );
   const project = (): Project => ({
     version: 1,
+    kinetics: kineticsConfiguration(),
     stacks,
     activeStackId,
     properties,
@@ -642,6 +740,254 @@ export default function App() {
     normalization,
     savedAt: new Date().toISOString(),
   });
+  const [documents, setDocuments] = useState(() =>
+    createWorkspace(project(), { isDemo: true }),
+  );
+  const documentsRef = useRef(documents);
+  const documentHistory = useRef(
+    new Map<
+      string,
+      {
+        undo: WorkspaceSnapshot[];
+        redo: WorkspaceSnapshot[];
+        back: [number, number][];
+        forward: [number, number][];
+      }
+    >(),
+  );
+  const restoredComponent = useRef<{
+    component: typeof component;
+    integral: string;
+    draft?: ProcessingRecipe;
+  } | null>(null);
+  function captureSession() {
+    return {
+      plotGain,
+      component,
+      tab,
+      tool,
+      panel,
+      draft,
+      selected,
+      selectedIntegral,
+      grid,
+      showPeaks,
+      showIntegrals,
+      navigatorViews,
+      fitEnabled,
+    };
+  }
+  function captureWorkspace() {
+    documentHistory.current.set(documentsRef.current.activeDocumentId, {
+      undo: undoRef.current,
+      redo: redoRef.current,
+      back: viewHistory.current,
+      forward: viewForward.current,
+    });
+    return captureDocument(
+      documentsRef.current,
+      documentsRef.current.activeDocumentId,
+      project(),
+      captureSession(),
+      isDemo,
+    );
+  }
+  function applyDocument(document: WorkspaceDocument) {
+    job.current++;
+    baselineJob.current++;
+    phaseEpoch.current++;
+    phaseLatest.current = null;
+    setBusy("");
+    setCursor(null);
+    setPreview(null);
+    setBaselineOpen(false);
+    setBaselineSource(null);
+    setBaselineCurve(null);
+    setContextMenu(null);
+    setIntegralEdit(null);
+    setPropertiesOpen(false);
+    setInspectorOpen(false);
+    setWarnings([]);
+    setFilter("");
+    setPlotGain(1);
+    setTool("select");
+    setTab("Analysis");
+    setPanel("overview");
+    setGrid(true);
+    setShowPeaks(true);
+    setShowIntegrals(true);
+    setHandAlign(false);
+    restoreProjectState(document.project);
+    setIsDemo(!!document.isDemo);
+    const history = documentHistory.current.get(document.id);
+    undoRef.current = history?.undo ?? [];
+    redoRef.current = history?.redo ?? [];
+    viewHistory.current = history?.back ?? [];
+    viewForward.current = history?.forward ?? [];
+    setHistoryVersion((v) => v + 1);
+    const session = document.session as
+      Partial<ReturnType<typeof captureSession>> | undefined;
+    if (session && typeof session === "object") {
+      if (
+        typeof session.plotGain === "number" &&
+        Number.isFinite(session.plotGain) &&
+        session.plotGain > 0
+      )
+        setPlotGain(session.plotGain);
+      if (
+        [
+          "File",
+          "Home",
+          "Processing",
+          "Analysis",
+          "Stack",
+          "Kinetics",
+          "Export",
+        ].includes(session.tab ?? "")
+      )
+        setTab(session.tab!);
+      if (
+        [
+          "select",
+          "zoom",
+          "pan",
+          "reference",
+          "peak",
+          "integral",
+          "multiplet",
+          "baseline",
+        ].includes(session.tool ?? "")
+      )
+        setTool(session.tool! === "baseline" ? "select" : session.tool!);
+      if (Array.isArray(session.selected))
+        setSelected(
+          session.selected.filter((id) =>
+            document.project.spectra.some((s) => s.id === id),
+          ),
+        );
+      for (const [value, setter] of [
+        [session.grid, setGrid],
+        [session.showPeaks, setShowPeaks],
+        [session.showIntegrals, setShowIntegrals],
+        [session.fitEnabled, setFitEnabled],
+      ] as const)
+        if (typeof value === "boolean") setter(value);
+      if (
+        ["real", "imag", "magnitude", "fid"].includes(session.component ?? "")
+      )
+        restoredComponent.current = {
+          component: session.component!,
+          integral:
+            typeof session.selectedIntegral === "string"
+              ? session.selectedIntegral
+              : "",
+        };
+      else restoredComponent.current = { component: "real", integral: "" };
+      if (session.draft && document.project.activeId) {
+        try {
+          const spectrum = document.project.spectra.find(
+            (s) => s.id === document.project.activeId,
+          )!;
+          validateProject({
+            ...document.project,
+            spectra: document.project.spectra.map((s) =>
+              s.id === spectrum.id ? { ...s, recipe: session.draft! } : s,
+            ),
+          });
+          if (restoredComponent.current)
+            restoredComponent.current.draft = session.draft;
+        } catch {
+          /* Invalid temporary recipes are discarded; saved processing remains intact. */
+        }
+      }
+      if (
+        session.navigatorViews &&
+        typeof session.navigatorViews === "object"
+      ) {
+        const valid = Object.fromEntries(
+          Object.entries(session.navigatorViews).filter(
+            ([id, v]) =>
+              document.project.spectra.some((s) => s.id === id) &&
+              v &&
+              Array.isArray(v.view) &&
+              v.view.length === 2 &&
+              v.view.every(Number.isFinite) &&
+              v.view[0] > v.view[1] &&
+              Number.isFinite(v.gain) &&
+              v.gain > 0 &&
+              ["real", "imag", "magnitude", "fid"].includes(v.component),
+          ),
+        );
+        setNavigatorViews(valid);
+      } else setNavigatorViews({});
+    } else {
+      setNavigatorViews({});
+      restoredComponent.current = { component: "real", integral: "" };
+    }
+  }
+  function setWorkspace(next: WorkspaceDocuments, restoreActive = true) {
+    documentsRef.current = next;
+    setDocuments(next);
+    const kept = new Set(
+      [...next.documents, ...next.closedDocuments].map((d) => d.id),
+    );
+    for (const id of documentHistory.current.keys())
+      if (!kept.has(id)) documentHistory.current.delete(id);
+    if (restoreActive)
+      applyDocument(
+        next.documents.find((d) => d.id === next.activeDocumentId)!,
+      );
+  }
+  function switchProject(id: string) {
+    if (busy || id === documentsRef.current.activeDocumentId) return;
+    setWorkspace(activateDocument(captureWorkspace(), id));
+  }
+  function newProject() {
+    if (busy) return;
+    try {
+      const current = captureWorkspace();
+      setWorkspace(
+        addDocument(
+          current,
+          createWorkspaceDocument(
+            createBlankProject(
+              `Untitled project ${current.documents.length + 1}`,
+            ),
+          ),
+        ),
+      );
+    } catch (e) {
+      notify(err(e));
+    }
+  }
+  function openProjectDocument(p: Project, isDemoDocument = false) {
+    const current = captureWorkspace();
+    setWorkspace(
+      addDocument(
+        current,
+        createWorkspaceDocument(p, { isDemo: isDemoDocument }),
+      ),
+    );
+  }
+  function closeProject(id: string) {
+    if (busy) return;
+    const current = captureWorkspace();
+    setWorkspace(closeDocument(current, id), id === current.activeDocumentId);
+    notify("Project closed · use Reopen to restore it");
+  }
+  function reopenProject() {
+    if (busy) return;
+    try {
+      setWorkspace(reopenDocument(captureWorkspace()));
+    } catch (e) {
+      notify(err(e));
+    }
+  }
+  function renameProject(id: string, name: string) {
+    const next = renameDocument(captureWorkspace(), id, name);
+    setWorkspace(next, false);
+    if (id === next.activeDocumentId) setProjectName(name);
+  }
   const notify = (message: string) => setToast(message);
   useEffect(() => {
     if (!toast) return;
@@ -650,7 +996,7 @@ export default function App() {
   }, [toast]);
   useEffect(() => {
     let cancelled = false;
-    loadRecovery()
+    loadWorkspaceRecovery()
       .then((p) => {
         if (cancelled) return;
         if (p) setRecovery(p);
@@ -662,10 +1008,12 @@ export default function App() {
     };
   }, []);
   useEffect(() => {
-    if (!ready || isDemo) return;
+    if (!ready) return;
     const timer = setTimeout(() => {
       setSaveState("Saving locally…");
-      saveRecovery(project())
+      const next = captureWorkspace();
+      documentsRef.current = next;
+      saveWorkspaceRecovery(next)
         .then((ok) =>
           setSaveState(
             ok ? "Saved locally" : "Autosave unavailable · save project",
@@ -686,6 +1034,29 @@ export default function App() {
     projectName,
     ready,
     isDemo,
+    documents,
+    kinTargets,
+    kinActiveTargetId,
+    kinMode,
+    stdFrom,
+    stdTo,
+    stdProtons,
+    stdConcentration,
+    concentrationUnit,
+    excluded,
+    kinView,
+    plotGain,
+    component,
+    tab,
+    tool,
+    grid,
+    showPeaks,
+    showIntegrals,
+    fitEnabled,
+    selected,
+    selectedIntegral,
+    draft,
+    navigatorViews,
   ]);
   useEffect(() => {
     if (active) {
@@ -701,8 +1072,14 @@ export default function App() {
           : (active.integrals[0]?.id ?? ""),
       );
     }
-    setComponent("real");
-  }, [activeId, active?.revision]);
+    const restored = restoredComponent.current;
+    setComponent(restored?.component ?? "real");
+    if (restored) {
+      setSelectedIntegral(restored.integral);
+      if (restored.draft) setDraft(restored.draft);
+      restoredComponent.current = null;
+    }
+  }, [documents.activeDocumentId, activeId, active?.revision]);
   useEffect(() => {
     phaseEpoch.current++;
     phaseLatest.current = null;
@@ -901,7 +1278,8 @@ export default function App() {
     if (t === "multiplet") setTable("Multiplets");
     if (t === "peak") setTable("Peaks");
   }
-  function restore(p: Project) {
+  function restoreProjectState(p: Project) {
+    restoreKinetics(p.kinetics);
     setSpectra(p.spectra);
     setStacks(p.stacks ?? []);
     setActiveStackId(p.activeStackId ?? null);
@@ -922,7 +1300,7 @@ export default function App() {
     setReady(true);
     notify(`Opened ${p.name}`);
   }
-  async function openFiles(files: File[]) {
+  async function openFiles(files: File[], attachTo2DId?: string) {
     if (!files.length || busy) return;
     const ticket = ++job.current;
     setBusy("Reading spectra…");
@@ -930,9 +1308,9 @@ export default function App() {
       const portable = files.find((f) =>
         f.name.toLowerCase().endsWith(".webnmr"),
       );
-      if (portable) {
+      if (portable && !attachTo2DId) {
         const p = await loadProject(portable);
-        if (ticket === job.current) restore(p);
+        if (ticket === job.current) openProjectDocument(p);
         return;
       }
       const result = await importBrowserFiles(files);
@@ -941,6 +1319,51 @@ export default function App() {
       if (!result.spectra.length) {
         notify(
           "No supported spectra found. Open the experiment folder or a ZIP.",
+        );
+        return;
+      }
+      if (attachTo2DId) {
+        const parent = spectra.find((s) => s.id === attachTo2DId);
+        if (!parent?.twoD)
+          throw new Error("Select a 2D spectrum before attaching a 1D trace.");
+        const imported = result.spectra.filter((s) => !s.twoD);
+        if (!imported.length)
+          throw new Error(
+            "Choose a processed 1D spectrum or a 1D experiment ZIP for the side traces.",
+          );
+        const m = parent.twoD;
+        const top = suitableTraceSources(imported, parent.nucleus, [
+          m.x[0] + parent.referenceOffset,
+          m.x.at(-1)! + parent.referenceOffset,
+        ])[0];
+        const left = suitableTraceSources(imported, m.nucleusF1, [
+          m.y[0] + m.referenceOffsetF1,
+          m.y.at(-1)! + m.referenceOffsetF1,
+        ])[0];
+        if (!top && !left)
+          throw new Error(
+            "This 1D spectrum’s nucleus or ppm range does not match either 2D axis.",
+          );
+        const viewState = initialTwoDView(parent);
+        commit([
+          ...spectra.map((s) =>
+            s.id === parent.id
+              ? {
+                  ...s,
+                  twoDView: {
+                    ...viewState,
+                    ...(top ? { topSpectrumId: top.id } : {}),
+                    ...(left ? { leftSpectrumId: left.id } : {}),
+                  },
+                }
+              : s,
+          ),
+          ...imported,
+        ]);
+        setIsDemo(false);
+        setReady(true);
+        notify(
+          "High-resolution 1D attached · use 2D settings to choose each side trace",
         );
         return;
       }
@@ -979,6 +1402,7 @@ export default function App() {
       if (fileInput.current) fileInput.current.value = "";
       if (folderInput.current) folderInput.current.value = "";
       if (projectInput.current) projectInput.current.value = "";
+      if (traceInput.current) traceInput.current.value = "";
     }
   }
   async function process(kind: "preview" | "apply", recipe = draft) {
@@ -1261,8 +1685,7 @@ export default function App() {
         setStdFrom(Math.max(a, b));
         setStdTo(Math.min(a, b));
       } else {
-        setKinFrom(Math.max(a, b));
-        setKinTo(Math.min(a, b));
+        updateTarget({ from: Math.max(a, b), to: Math.min(a, b) });
       }
       setKinPicking(null);
       setFitEnabled(false);
@@ -1671,11 +2094,7 @@ export default function App() {
     notify("Spectrum properties applied");
   }
   function exportKinetics() {
-    exportKineticsCSV(kineticsPoints, fitResult.fit ?? undefined, {
-      measurements: kineticMeasurements,
-      options: kineticOptions,
-      stackLabel: activeStack?.label,
-    });
+    exportKineticTargetsCSV(kineticSeries, kineticOptions, activeStack?.label);
   }
   function enterTab(t: Tab) {
     if (busy) return;
@@ -1850,22 +2269,20 @@ export default function App() {
       active?.nucleus,
     ],
   );
-  const kineticMeasurements = useMemo(
-    () => measureKinetics(spectra, kineticOptions),
-    [measurementSignature, kineticOptions],
+  const kineticSeries = useMemo(
+    () =>
+      measureKineticTargets(spectra, kinTargets, kineticOptions, fitEnabled),
+    [measurementSignature, kinTargets, kineticOptions, fitEnabled],
   );
-  const kineticsPoints: KineticPoint[] = useMemo(
-    () => measuredPoints(kineticMeasurements),
-    [kineticMeasurements],
-  );
-  const fitResult = useMemo(() => {
-    if (!fitEnabled) return { fit: null, error: "" };
-    try {
-      return { fit: fitKinetics(kineticsPoints, kinModel), error: "" };
-    } catch (e) {
-      return { fit: null, error: err(e) };
-    }
-  }, [kineticsPoints, kinModel, fitEnabled]);
+  const activeKineticSeries = kineticSeries.find(
+    (series) => series.target.id === kineticTarget.id,
+  )!;
+  const kineticMeasurements = activeKineticSeries.measurements;
+  const kineticsPoints = activeKineticSeries.points;
+  const fitResult = {
+    fit: activeKineticSeries.fit,
+    error: activeKineticSeries.error,
+  };
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
@@ -1880,6 +2297,11 @@ export default function App() {
       if (command && k === "o") {
         e.preventDefault();
         fileInput.current?.click();
+        return;
+      }
+      if (command && k === "n") {
+        e.preventDefault();
+        newProject();
         return;
       }
       if (command && k === "s") {
@@ -2283,11 +2705,41 @@ export default function App() {
       onDrop={(e) => {
         e.preventDefault();
         setDragOver(false);
+        if (busy) return;
+        const ticket = ++job.current;
+        const documentId = documentsRef.current.activeDocumentId;
+        setBusy("Reading dropped files…");
         void droppedFiles(e.dataTransfer)
-          .then(openFiles)
-          .catch((e) => notify(err(e)));
+          .then((files) => {
+            if (
+              ticket !== job.current ||
+              documentId !== documentsRef.current.activeDocumentId
+            )
+              return;
+            setBusy("");
+            return openFiles(files);
+          })
+          .catch((error) => {
+            if (ticket === job.current) {
+              setBusy("");
+              notify(err(error));
+            }
+          });
       }}
     >
+      <input
+        ref={traceInput}
+        className="hidden-input"
+        type="file"
+        multiple
+        aria-label="Import high-resolution 1D trace"
+        onChange={(e) =>
+          void openFiles(
+            Array.from(e.target.files ?? []),
+            active?.twoD ? active.id : undefined,
+          )
+        }
+      />
       <input
         ref={fileInput}
         className="hidden-input"
@@ -2550,6 +3002,15 @@ export default function App() {
           <>
             <div className="ribbon-group">
               <RibbonButton
+                icon={Plus}
+                label="New project"
+                shortcut="⌘ N"
+                onClick={newProject}
+              />
+              <span className="group-label">New</span>
+            </div>
+            <div className="ribbon-group">
+              <RibbonButton
                 icon={FolderOpen}
                 label="Open folder"
                 onClick={() => folderInput.current?.click()}
@@ -2564,21 +3025,15 @@ export default function App() {
                 label="Example project"
                 onClick={() => {
                   const d = createDemoSpectra();
-                  setSpectra(d);
-                  setStacks([]);
-                  setActiveStackId(null);
-                  setSelectedStackId(null);
-                  setSelected([]);
-                  setBaselineOpen(false);
-                  undoRef.current = [];
-                  redoRef.current = [];
-                  setHistoryVersion((n) => n + 1);
-                  setActiveId(d[0].id);
-                  setIsDemo(true);
-                  setProjectName("Reaction monitoring");
-                  setView([10, -0.5]);
-                  setMode("single");
-                  setReady(true);
+                  openProjectDocument(
+                    {
+                      ...createBlankProject("Reaction monitoring"),
+                      spectra: d,
+                      activeId: d[0].id,
+                      view: [10, -0.5],
+                    },
+                    true,
+                  );
                 }}
               />
               <span className="group-label">Open</span>
@@ -2686,19 +3141,32 @@ export default function App() {
         >
           <Layers size={16} />
         </button>
-        <span className="document-tab">
-          <FileText size={15} />
-          <input
-            value={projectName}
-            aria-label="Project name"
-            onChange={(e) => {
-              setProjectName(e.target.value);
-              setIsDemo(false);
-            }}
-          />
-          {isDemo && <span className="demo-pill">DEMO</span>}
-        </span>
+        <ProjectTabs
+          documents={documents.documents.map((d) =>
+            d.id === documents.activeDocumentId
+              ? { ...d, project: { ...d.project, name: projectName }, isDemo }
+              : d,
+          )}
+          activeDocumentId={documents.activeDocumentId}
+          onActivate={switchProject}
+          onClose={closeProject}
+          onNew={newProject}
+          onRename={renameProject}
+          onReopen={reopenProject}
+          closedCount={documents.closedDocuments.length}
+          disabled={!!busy}
+        />
         <div className="document-actions">
+          {isDemo && tab === "Kinetics" && (
+            <button
+              className="kinetics-demo-note"
+              title="Explore a synthetic reaction series. Open your own data to begin."
+              onClick={() => fileInput.current?.click()}
+            >
+              <Sparkles size={12} />
+              Example series · Open data
+            </button>
+          )}
           <span>{spectra.length} spectra</span>
           <button
             className="icon-button"
@@ -2975,7 +3443,7 @@ export default function App() {
               </div>
             </div>
           )}
-          {isDemo && (
+          {isDemo && tab !== "Kinetics" && (
             <div className="demo-banner">
               <span>
                 <Sparkles size={14} /> Explore a synthetic reaction series. Open
@@ -2988,6 +3456,19 @@ export default function App() {
           )}
           {tab === "Kinetics" ? (
             <KineticsWorkspace
+              targets={kinTargets}
+              activeTargetId={kineticTarget.id}
+              series={kineticSeries}
+              onTargetSelect={setKinActiveTargetId}
+              onTargetChange={updateTarget}
+              onTargetAdd={addKineticTarget}
+              onTargetRemove={(id) => {
+                if (kinTargets.length === 1) return;
+                const next = kinTargets.filter((t) => t.id !== id);
+                setKinTargets(next);
+                if (kineticTarget.id === id) setKinActiveTargetId(next[0].id);
+                setFitEnabled(false);
+              }}
               spectra={kineticSpectra}
               stacks={stacks}
               activeStackId={activeStackId}
@@ -3136,16 +3617,29 @@ export default function App() {
                     onIntegralMenu={() => {}}
                     onFit={full}
                     exportRef={svgExport}
+                    onRegionSelect={(id) => {
+                      if (id !== "standard") setKinActiveTargetId(id);
+                    }}
+                    onRegionResize={(id, from, to) => {
+                      if (id === "standard") {
+                        setStdFrom(from);
+                        setStdTo(to);
+                        setFitEnabled(false);
+                      } else updateTarget({ from, to }, id);
+                    }}
                     regions={[
-                      {
-                        from: kinFrom,
-                        to: kinTo,
-                        color: "#1689e9",
-                        label: "Target",
-                      },
+                      ...kinTargets.map((t) => ({
+                        id: t.id,
+                        from: t.from,
+                        to: t.to,
+                        color: t.color,
+                        label: t.label,
+                        selected: t.id === kineticTarget.id,
+                      })),
                       ...(kinMode !== "area"
                         ? [
                             {
+                              id: "standard",
                               from: stdFrom,
                               to: stdTo,
                               color: "#329771",
@@ -3179,9 +3673,10 @@ export default function App() {
               >
                 {active.twoD ? (
                   <TwoDPlot
-                    key={active.id}
+                    key={`${documents.activeDocumentId}:${active.id}`}
                     spectrum={active}
                     spectra={spectra}
+                    onImport1D={() => traceInput.current?.click()}
                     viewState={active.twoDView}
                     onViewChange={(v) =>
                       setSpectra((all) =>
@@ -4610,7 +5105,7 @@ export default function App() {
         <span>
           {active?.twoD
             ? `${active.twoD.width.toLocaleString()} × ${active.twoD.height.toLocaleString()} 2D`
-            : `${active?.data.real.length.toLocaleString()} points`}
+            : `${active?.data.real.length.toLocaleString() ?? "0"} points`}
           <span className="status-divider">|</span>
           {scope === "active"
             ? "Active spectrum"
@@ -4704,18 +5199,34 @@ export default function App() {
               <h2>Resume your workspace?</h2>
             </div>
             <p>
-              <b>{recovery.name}</b> · {recovery.spectra.length} spectra
+              <b>
+                {recovery.documents.length} open project
+                {recovery.documents.length === 1 ? "" : "s"}
+              </b>{" "}
+              ·{" "}
+              {recovery.documents.reduce(
+                (sum, d) => sum + d.project.spectra.length,
+                0,
+              )}{" "}
+              spectra
               <br />
               Last saved {new Date(recovery.savedAt).toLocaleString()}
             </p>
             <div className="processing-buttons">
-              <button className="primary" onClick={() => restore(recovery)}>
+              <button
+                className="primary"
+                onClick={() => {
+                  setWorkspace(recovery);
+                  setRecovery(null);
+                  setReady(true);
+                }}
+              >
                 Recover workspace
               </button>
               <button
                 className="secondary"
                 onClick={() => {
-                  void clearRecovery();
+                  void clearWorkspaceRecovery();
                   setRecovery(null);
                   setReady(true);
                 }}

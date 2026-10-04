@@ -292,3 +292,31 @@ export function exportKineticsCSV(
 ) {
   return csvDownload(kineticsCSV(points, fit, context), "kinetics.csv");
 }
+
+/** One CSV contains every target, its measurement context, and its independent fit. */
+export function exportKineticTargetsCSV(
+  series: import("./kinetics").KineticSeries[],
+  options: import("./kinetics").KineticsMeasurementOptions,
+  stackLabel?: string,
+) {
+  const sections = series.map(
+    (s) =>
+      makeCSV([
+        ["target_id", s.target.id],
+        ["target_label", s.target.label],
+        ["model", s.target.model],
+      ]) +
+      "\r\n" +
+      kineticsCSV(s.points, s.fit ?? undefined, {
+        measurements: s.measurements,
+        options: {
+          ...options,
+          from: s.target.from,
+          to: s.target.to,
+          targetProtons: s.target.protons,
+        },
+        stackLabel,
+      }),
+  );
+  return csvDownload(sections.join("\r\n\r\n"), "kinetics-targets.csv");
+}

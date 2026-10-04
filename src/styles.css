@@ -2385,3 +2385,7 @@ a {
     width: auto;
   }
 }
+
+.kinetics-demo-note {display:flex;gap:5px;align-items:center;font-size:10px;color:#cfa9b7;white-space:nowrap;padding:4px 6px;}
+.documentbar {min-width:0;}.documentbar .project-tabs-bar {flex:1;min-width:0;}
+@media(max-width:900px){.kinetics-demo-note{font-size:0;}.kinetics-demo-note svg{width:13px;height:13px;}}

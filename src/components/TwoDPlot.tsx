@@ -2,13 +2,15 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { Spectrum, Tool, TwoDView } from "../model";
 import type { SpectrumProperties } from "../features/appearance";
 import { contourPath, visibleGrid } from "../features/contours";
-import { maximumProjection } from "../core/twoD";
 import {
   f1Pixel,
   suitableTraceSources,
+  skylineProjections,
   traceEnvelope,
   tracePath,
   validTwoDView,
+  traceSourceKey,
+  reconcileTraceSources,
 } from "../features/twoDTraces";
 import "./TwoDPlot.css";
 interface Props {
@@ -22,6 +24,7 @@ interface Props {
   intensityRef?: React.RefObject<((factor: number) => void) | null>;
   viewState?: TwoDView;
   onViewChange?: (view: TwoDView) => void;
+  onImport1D?: () => void;
 }
 export function initialTwoDView(s: Spectrum, saved?: TwoDView): TwoDView {
   if (validTwoDView(saved || s.twoDView)) return saved || s.twoDView!;
@@ -54,6 +57,7 @@ export function TwoDPlot({
   intensityRef,
   viewState,
   onViewChange,
+  onImport1D,
 }: Props) {
   const m = s.twoD!,
     host = useRef<HTMLDivElement>(null),
@@ -72,6 +76,7 @@ export function TwoDPlot({
     } | null>(null),
     [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
   const matrixIdentity = useRef(m);
+  const sourceEchoes = useRef(new Set([traceSourceKey(view)]));
   const identity = useRef(s.id),
     notify = useRef(onViewChange),
     pendingChange = useRef(false);
@@ -81,7 +86,9 @@ export function TwoDPlot({
       matrixIdentity.current = m;
       identity.current = s.id;
       pendingChange.current = false;
-      setView(initialTwoDView(s, viewState));
+      const next = initialTwoDView(s, viewState);
+      sourceEchoes.current = new Set([traceSourceKey(next)]);
+      setView(next);
       setDrag(null);
       setCursor(null);
     }
@@ -89,9 +96,20 @@ export function TwoDPlot({
   useEffect(() => {
     if (pendingChange.current && identity.current === s.id) {
       pendingChange.current = false;
+      sourceEchoes.current.add(traceSourceKey(view));
+      if (sourceEchoes.current.size > 32) {
+        const oldest = sourceEchoes.current.values().next().value;
+        if (oldest !== undefined) sourceEchoes.current.delete(oldest);
+      }
       notify.current?.(view);
     }
   }, [view]);
+  useEffect(() => {
+    if (!validTwoDView(viewState) || pendingChange.current) return;
+    setView((current) =>
+      reconcileTraceSources(current, viewState, sourceEchoes.current),
+    );
+  }, [viewState?.topSpectrumId, viewState?.leftSpectrumId]);
   const change = (produce: (current: TwoDView) => TwoDView) => {
     pendingChange.current = true;
     setView(produce);
@@ -99,8 +117,8 @@ export function TwoDPlot({
   const update = (patch: Partial<TwoDView>) =>
     change((v) => ({ ...v, ...patch }));
   const { xView, yView, threshold, negative } = view;
-  const left = Math.max(56, Math.min(105, size.w * 0.14)),
-    top = Math.max(56, Math.min(100, size.h * 0.19)),
+  const left = Math.max(48, Math.min(82, size.w * 0.1)),
+    top = Math.max(52, Math.min(82, size.h * 0.15)),
     right = 67,
     bottom = 52;
   const w = Math.max(20, size.w - left - right),
@@ -191,13 +209,7 @@ export function TwoDPlot({
         ]),
     [matrix, max, threshold, negative, w, h, left, top],
   );
-  const projections = useMemo(
-    () => ({
-      top: maximumProjection(m, "F2"),
-      left: maximumProjection(m, "F1"),
-    }),
-    [m],
-  );
+  const projections = useMemo(() => skylineProjections(m), [m]);
   const topSources = useMemo(
     () =>
       suitableTraceSources(spectra, s.nucleus, [
@@ -416,16 +428,16 @@ export function TwoDPlot({
           d={topPath}
           clipPath={`url(#${clip}-top)`}
           fill="none"
-          stroke={topSource?.color || s.color}
-          strokeWidth={a.lineWidth}
+          stroke="#dc2828"
+          strokeWidth={Math.max(0.65, Math.min(1.1, a.lineWidth))}
         />
         <path
           data-testid="left-projection"
           d={leftPath}
           clipPath={`url(#${clip}-left)`}
           fill="none"
-          stroke={leftSource?.color || s.color}
-          strokeWidth={a.lineWidth}
+          stroke="#dc2828"
+          strokeWidth={Math.max(0.65, Math.min(1.1, a.lineWidth))}
         />
         <rect
           data-ui="true"
@@ -578,20 +590,32 @@ export function TwoDPlot({
           />
         )}
       </svg>
-      <button
-        type="button"
-        className="two-d-settings-toggle"
-        data-two-d-controls="true"
-        aria-label="2D display settings"
-        aria-expanded={settings}
-        onClick={() => setSettings((v) => !v)}
-      >
-        2D settings
-      </button>
+      <div className="two-d-actions" data-two-d-controls="true">
+        <button
+          type="button"
+          className="two-d-import-trace"
+          onClick={() => {
+            setSettings(true);
+            onImport1D?.();
+          }}
+        >
+          Add high-resolution 1D
+        </button>
+        <button
+          type="button"
+          className="two-d-settings-toggle"
+          data-two-d-controls="true"
+          aria-label="2D display settings"
+          aria-expanded={settings}
+          onClick={() => setSettings((v) => !v)}
+        >
+          2D settings
+        </button>
+      </div>
       {settings && (
         <div className="two-d-settings" data-two-d-controls="true">
           <label>
-            Top trace ({s.nucleus})
+            Top 1D source ({s.nucleus})
             <select
               aria-label="Top trace source"
               value={topSource?.id || ""}
@@ -602,7 +626,7 @@ export function TwoDPlot({
                 })
               }
             >
-              <option value="">2D projection</option>
+              <option value="">2D skyline projection</option>
               {topSources.map((source) => (
                 <option key={source.id} value={source.id}>
                   {source.label}
@@ -611,7 +635,7 @@ export function TwoDPlot({
             </select>
           </label>
           <label>
-            Left trace ({m.nucleusF1})
+            Left 1D source ({m.nucleusF1})
             <select
               aria-label="Left trace source"
               value={leftSource?.id || ""}
@@ -622,7 +646,7 @@ export function TwoDPlot({
                 })
               }
             >
-              <option value="">2D projection</option>
+              <option value="">2D skyline projection</option>
               {leftSources.map((source) => (
                 <option key={source.id} value={source.id}>
                   {source.label}
@@ -631,10 +655,25 @@ export function TwoDPlot({
             </select>
           </label>
           <small>
-            Import a 1D spectrum to use it here. Scroll over either trace to
-            adjust its height independently.
+            Choose an imported 1D for finer detail. Sources align by referenced
+            ppm. Scroll over each red trace to scale it independently.
+          </small>
+          <small title="Each projection displays the largest absolute crosspeak at each ppm as a positive amplitude, with an estimated noise floor removed. Signs remain in the contours; full matrix and imported 1D data are unchanged.">
+            Default: amplitude skyline with display noise suppression.
           </small>
           <div className="two-d-inline">
+            <button
+              onClick={() =>
+                update({
+                  topSpectrumId: undefined,
+                  leftSpectrumId: undefined,
+                  topGain: 1,
+                  leftGain: 1,
+                })
+              }
+            >
+              Use projections
+            </button>
             <button onClick={() => update({ topGain: 1, leftGain: 1 })}>
               Reset trace heights
             </button>

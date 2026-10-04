@@ -1,4 +1,9 @@
-import type { KineticFit, KineticPoint, Spectrum } from "../model";
+import type {
+  KineticFit,
+  KineticPoint,
+  Spectrum,
+  KineticTarget,
+} from "../model";
 import { integrate } from "../core/numerics";
 
 export interface KineticsMeasurementOptions {
@@ -317,4 +322,39 @@ export function fitKinetics(
     rmse: Math.sqrt(sse / selected.length),
     ...(halfLife === undefined ? {} : { halfLife }),
   };
+}
+
+export interface KineticSeries {
+  target: KineticTarget;
+  measurements: KineticMeasurement[];
+  points: KineticPoint[];
+  fit: KineticFit | null;
+  error: string;
+}
+/** Every target uses its own region, proton count, and model against the same standard. */
+export function measureKineticTargets(
+  spectra: Spectrum[],
+  targets: KineticTarget[],
+  options: Omit<KineticsMeasurementOptions, "from" | "to" | "targetProtons">,
+  fitEnabled = false,
+): KineticSeries[] {
+  return targets.map((target) => {
+    const measurements = measureKinetics(spectra, {
+      ...options,
+      from: target.from,
+      to: target.to,
+      targetProtons: target.protons,
+    });
+    const points = kineticsPoints(measurements);
+    let fit: KineticFit | null = null,
+      error = "";
+    if (fitEnabled) {
+      try {
+        fit = fitKinetics(points, target.model);
+      } catch (e) {
+        error = e instanceof Error ? e.message : String(e);
+      }
+    }
+    return { target, measurements, points, fit, error };
+  });
 }

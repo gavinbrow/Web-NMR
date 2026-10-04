@@ -4,7 +4,16 @@ import { displayedIntegralValue } from "../features/integrals";
 import type { SpectrumProperties } from "../features/appearance";
 
 interface Props {
-  regions?: { from: number; to: number; color: string; label: string }[];
+  regions?: {
+    id?: string;
+    from: number;
+    to: number;
+    color: string;
+    label: string;
+    selected?: boolean;
+  }[];
+  onRegionSelect?: (id: string) => void;
+  onRegionResize?: (id: string, from: number, to: number) => void;
   spectra: Spectrum[];
   active: Spectrum;
   view: [number, number];
@@ -545,6 +554,44 @@ export function SpectrumPlot(p: Props) {
   };
   const pointerX = (e: React.PointerEvent) =>
     e.clientX - host.current!.getBoundingClientRect().left;
+  const [regionDrag, setRegionDrag] = useState<{
+    id: string;
+    edge: "from" | "to";
+    from: number;
+    to: number;
+  } | null>(null);
+  const [regionHover, setRegionHover] = useState(false);
+  function regionEdge(x: number, y: number) {
+    if (
+      !p.onRegionResize ||
+      !p.regions ||
+      y < pad.t ||
+      y > pad.t + ph ||
+      isFid ||
+      space.current ||
+      p.tool === "pan"
+    )
+      return;
+    let best:
+      | {
+          region: NonNullable<Props["regions"]>[number];
+          edge: "from" | "to";
+          distance: number;
+        }
+      | undefined;
+    for (const region of p.regions)
+      for (const edge of ["from", "to"] as const) {
+        const distance = Math.abs(x - xPixel(region[edge]));
+        if (
+          distance < 8 &&
+          (!best ||
+            distance < best.distance ||
+            (distance === best.distance && region.selected))
+        )
+          best = { region, edge, distance };
+      }
+    return best;
+  }
   const instruction = isFid
     ? "FID · real time signal"
     : {
@@ -564,6 +611,7 @@ export function SpectrumPlot(p: Props) {
       data-testid="spectrum-plot"
       style={{
         background: `color-mix(in srgb, ${a.background} ${a.backgroundOpacity}%, white)`,
+        ...(regionHover || regionDrag ? { cursor: "ew-resize" } : {}),
       }}
       onWheel={(e) => {
         if (isFid) return;
@@ -593,6 +641,17 @@ export function SpectrumPlot(p: Props) {
         e.currentTarget.setPointerCapture(e.pointerId);
         const y = e.clientY - host.current!.getBoundingClientRect().top,
           hit = nearestTrace(x, y);
+        const boundary = regionEdge(x, y);
+        if (boundary?.region.id) {
+          p.onRegionSelect?.(boundary.region.id);
+          setRegionDrag({
+            id: boundary.region.id,
+            edge: boundary.edge,
+            from: boundary.region.from,
+            to: boundary.region.to,
+          });
+          return;
+        }
         const integral = integralHit(x, y);
         if (integral) {
           p.onIntegralSelect(integral.t.s.id, integral.i.id);
@@ -641,15 +700,40 @@ export function SpectrumPlot(p: Props) {
       }}
       onPointerMove={(e) => {
         const x = pointerX(e);
-        const ppm = ppmAt(x);
+        const ppm = ppmAt(Math.max(pad.l, Math.min(pad.l + pw, x)));
+        const y = e.clientY - host.current!.getBoundingClientRect().top;
+        setRegionHover(!!regionEdge(x, y));
+        if (regionDrag) {
+          const from = regionDrag.edge === "from" ? ppm : regionDrag.from;
+          const to = regionDrag.edge === "to" ? ppm : regionDrag.to;
+          if (Math.abs(from - to) > (v[0] - v[1]) / pw)
+            p.onRegionResize?.(
+              regionDrag.id,
+              Math.max(from, to),
+              Math.min(from, to),
+            );
+          return;
+        }
         setCursor(x);
         p.onCursor(ppm);
         setDrag((d) => (d ? { ...d, end: x } : null));
       }}
-      onPointerLeave={() => setCursor(null)}
+      onPointerLeave={() => {
+        setCursor(null);
+        setRegionHover(false);
+      }}
+      onPointerCancel={() => {
+        setRegionDrag(null);
+        setDrag(null);
+      }}
       onPointerUp={(e) => {
+        if (regionDrag) {
+          setRegionDrag(null);
+          return;
+        }
         if (!drag) return;
-        const { start, end, pan, shiftId, integral } = drag;
+        const { start, pan, shiftId, integral } = drag;
+        const end = pointerX(e);
         setDrag(null);
         if (isFid) return;
         if (integral) {
@@ -713,7 +797,7 @@ export function SpectrumPlot(p: Props) {
               const left = Math.min(xPixel(region.from), xPixel(region.to));
               const width = Math.abs(xPixel(region.from) - xPixel(region.to));
               return (
-                <g key={region.label}>
+                <g key={region.id ?? region.label} data-region-id={region.id}>
                   <rect
                     x={left}
                     y={pad.t}
@@ -725,9 +809,30 @@ export function SpectrumPlot(p: Props) {
                   <path
                     d={`M${left},${pad.t}V${pad.t + ph}M${left + width},${pad.t}V${pad.t + ph}`}
                     stroke={region.color}
-                    strokeOpacity={0.6}
+                    strokeOpacity={region.selected ? 1 : 0.6}
+                    strokeWidth={region.selected ? 1.5 : 1}
                     strokeDasharray="4 3"
                   />
+                  {p.onRegionResize && region.selected && (
+                    <>
+                      <rect
+                        x={left - 3}
+                        y={pad.t + ph / 2 - 9}
+                        width={6}
+                        height={18}
+                        rx={2}
+                        fill={region.color}
+                      />
+                      <rect
+                        x={left + width - 3}
+                        y={pad.t + ph / 2 - 9}
+                        width={6}
+                        height={18}
+                        rx={2}
+                        fill={region.color}
+                      />
+                    </>
+                  )}
                   <text
                     x={left + 4}
                     y={pad.t + ph - 8}

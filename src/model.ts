@@ -158,7 +158,11 @@ export interface Spectrum {
   integrals: Integral[];
   multiplets: Multiplet[];
   integralScale: number;
-  integralCalibration?: { anchorId: string; target: number; tentative?: boolean };
+  integralCalibration?: {
+    anchorId: string;
+    target: number;
+    tentative?: boolean;
+  };
   gain: number;
   visible: boolean;
   timeMinutes?: number;
@@ -173,7 +177,29 @@ export interface ImportResult {
   spectra: Spectrum[];
   warnings: string[];
 }
+export interface KineticTarget {
+  id: string;
+  label: string;
+  color: string;
+  from: number;
+  to: number;
+  protons: number;
+  model: KineticFit["model"];
+}
+export interface KineticsConfiguration {
+  targets: KineticTarget[];
+  activeTargetId: string;
+  mode: "area" | "ratio" | "concentration";
+  standardFrom: number;
+  standardTo: number;
+  standardProtons: number;
+  standardConcentration: number;
+  concentrationUnit: string;
+  excludedIds: string[];
+  view: "curve" | "spectra";
+}
 export interface Project {
+  kinetics?: KineticsConfiguration;
   stacks?: SpectrumStack[];
   activeStackId?: string | null;
   properties?: SpectrumProperties;

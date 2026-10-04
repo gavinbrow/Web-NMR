@@ -3,6 +3,10 @@ import type { Spectrum, TwoDView } from "../model";
 import {
   f1Pixel,
   suitableTraceSources,
+  skylineProjections,
+  projectionNoiseFloor,
+  traceSourceKey,
+  reconcileTraceSources,
   traceEnvelope,
   tracePath,
   validTwoDView,
@@ -10,6 +14,8 @@ import {
 import { importEntries } from "../core/imports";
 import { maximumProjection } from "../core/twoD";
 import { decodeProject, encodeProject, validateProject } from "./project";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const source = (): Spectrum =>
   importEntries([
@@ -19,6 +25,118 @@ const source = (): Spectrum =>
     },
   ]).spectra[0];
 describe("2D trace display", () => {
+  it("ignores delayed source-selection acknowledgements while accepting new imports without resetting the viewport", () => {
+    const initial: TwoDView = {
+      xView: [8, 2],
+      yView: [9, 1],
+      threshold: 3,
+      negative: true,
+      topGain: 2,
+      leftGain: 4,
+    };
+    const top = { ...initial, topSpectrumId: "proton" },
+      both = { ...top, leftSpectrumId: "proton" };
+    const outgoing = new Set([
+      traceSourceKey(initial),
+      traceSourceKey(top),
+      traceSourceKey(both),
+    ]);
+    expect(reconcileTraceSources(both, top, outgoing)).toBe(both);
+    expect(reconcileTraceSources(both, initial, outgoing)).toBe(both);
+    const external = {
+      ...initial,
+      xView: [10, 0] as [number, number],
+      topGain: 1,
+      leftGain: 1,
+      topSpectrumId: "new-1d",
+      leftSpectrumId: "new-1d",
+    };
+    const merged = reconcileTraceSources(both, external, outgoing);
+    expect(merged).toEqual({
+      ...both,
+      topSpectrumId: "new-1d",
+      leftSpectrumId: "new-1d",
+    });
+    expect(merged.xView).toBe(both.xView);
+    expect(merged.yView).toBe(both.yView);
+    expect(reconcileTraceSources(merged, external, outgoing)).toBe(merged);
+  });
+  it("uses positive amplitude skylines without cancellation or alternating signs", () => {
+    const matrix = {
+      x: Float64Array.of(3, 2, 1),
+      y: Float64Array.of(4, 3, 2),
+      width: 3,
+      height: 3,
+      real: Float64Array.of(10, -50, 0, -100, 6, 0, 0, 2, -20),
+    };
+    const projection = skylineProjections(matrix, 0);
+    expect([...projection.top.real]).toEqual([100, 50, 20]);
+    expect([...projection.left.real]).toEqual([50, 100, 20]);
+    expect(matrix.real[3]).toBe(-100); // Display projection does not mutate source values.
+    const floored = skylineProjections(matrix, 3);
+    expect([...floored.top.real]).toEqual([97, 47, 17]);
+  });
+  it("suppresses the extreme-value noise pedestal while retaining narrow crosspeaks", () => {
+    let state = 17;
+    const real = Float64Array.from({ length: 10000 }, () => {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+      return (state / 0xffffffff) * 2 - 1;
+    });
+    real[1234] = 20;
+    real[5678] = -40;
+    const matrix = {
+      x: Float64Array.from({ length: 100 }, (_, i) => 100 - i),
+      y: Float64Array.from({ length: 100 }, (_, i) => 100 - i),
+      width: 100,
+      height: 100,
+      real,
+    };
+    const floor = projectionNoiseFloor(matrix),
+      result = skylineProjections(matrix);
+    expect(floor).toBeGreaterThan(1);
+    expect(result.top.real[34]).toBeCloseTo(20 - floor, 10);
+    expect(result.left.real[12]).toBeCloseTo(20 - floor, 10);
+    expect(result.top.real[78]).toBeCloseTo(40 - floor, 10);
+    expect([...result.top.real].filter((v) => v > 0)).toHaveLength(2);
+    expect([...result.left.real].filter((v) => v > 0)).toHaveLength(2);
+  });
+  it("keeps supplied NOESY skyline positions aligned on both axes and removes display noise only", () => {
+    const folder = "DAC-1P Nosy Cosy C13/5",
+      base = join(process.cwd(), "../Example Files", folder);
+    const entries = [
+      "acqus",
+      "acqu2s",
+      "pdata/1/procs",
+      "pdata/1/proc2s",
+      "pdata/1/2rr",
+    ].map((path) => {
+      const b = readFileSync(join(base, path));
+      return {
+        path: join(folder, path),
+        data: b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength),
+      };
+    });
+    const matrix = importEntries(entries).spectra[0].twoD!,
+      original = matrix.real.slice(),
+      unfiltered = skylineProjections(matrix, 0),
+      filtered = skylineProjections(matrix);
+    const maxIndex = (values: Float64Array) =>
+      values.reduce(
+        (best, value, index) => (value > values[best] ? index : best),
+        0,
+      );
+    const x = matrix.x[maxIndex(filtered.top.real)],
+      y = matrix.y[maxIndex(filtered.left.real)];
+    expect(Math.abs(x - y)).toBeLessThan(0.03);
+    expect(x).toBeCloseTo(7.275, 2);
+    expect(filtered.floor).toBeGreaterThan(0);
+    expect(filtered.top.real.filter((v) => v > 0).length).toBeLessThan(
+      unfiltered.top.real.filter((v) => v > 0).length,
+    );
+    expect(
+      Buffer.from(matrix.real.buffer).equals(Buffer.from(original.buffer)),
+    ).toBe(true);
+  });
   it("preserves narrow positive and negative peaks across a million-point trace", () => {
     const x = Float64Array.from(
         { length: 1_000_000 },

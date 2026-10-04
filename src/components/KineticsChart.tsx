@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import type { KineticSeries } from "../features/kinetics";
 import type { KineticPoint, KineticFit } from "../model";
 
 const tick = (n: number) =>
@@ -10,12 +11,14 @@ const tick = (n: number) =>
 
 export function KineticsChart({
   points,
+  series,
   fit,
   label = "Integrated area",
   onSelect,
   activeId,
 }: {
   points: KineticPoint[];
+  series?: KineticSeries[];
   fit: KineticFit | null;
   label?: string;
   onSelect?: (id: string) => void;
@@ -35,9 +38,16 @@ export function KineticsChart({
   }, []);
   const { w, h } = size;
   const pad = { l: w < 450 ? 76 : 88, r: 28, t: 14, b: 47 };
-  const valid = points.filter(
-    (p) => Number.isFinite(p.time) && Number.isFinite(p.value),
-  );
+  const displayed = series ?? [
+    {
+      target: { id: "single", label: "Measurements", color: "#a73249" },
+      points,
+      fit,
+    },
+  ];
+  const valid = displayed
+    .flatMap((s) => s.points)
+    .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.value));
   const xs = valid.map((p) => p.time),
     ys = valid.map((p) => p.value);
   const minX = Math.min(0, ...xs),
@@ -51,11 +61,12 @@ export function KineticsChart({
     pad.l + ((v - minX) / (maxX - minX)) * (w - pad.l - pad.r);
   const y = (v: number) =>
     h - pad.b - ((v - minY) / (maxY - minY)) * (h - pad.t - pad.b);
-  const curve: [number, number][] = [];
-  if (fit) {
+  function curvePath(fit: KineticFit | null) {
+    if (!fit) return "";
+    const curve: [number, number][] = [];
     for (let i = 0; i <= 200; i++) {
-      const t = minX + ((maxX - minX) * i) / 200;
-      const p = fit.parameters,
+      const t = minX + ((maxX - minX) * i) / 200,
+        p = fit.parameters,
         dt = t - (p.timeOrigin ?? 0);
       const value =
         fit.model === "linear"
@@ -67,6 +78,7 @@ export function KineticsChart({
               (p.amplitude ?? 0) * (1 - Math.exp(-(p.rate ?? 0) * dt));
       if (Number.isFinite(value)) curve.push([x(t), y(value)]);
     }
+    return curve.map(([a, b], i) => `${i ? "L" : "M"}${a},${b}`).join(" ");
   }
   return (
     <div ref={host} className="kinetics-chart-host">
@@ -117,50 +129,56 @@ export function KineticsChart({
           </g>
         ))}
         <g clipPath={`url(#${clip})`}>
-          {fit && (
-            <path
-              d={curve
-                .map(([a, b], i) => `${i ? "L" : "M"}${a},${b}`)
-                .join(" ")}
-              stroke="#1689e9"
-              strokeWidth={2}
-              fill="none"
-            />
-          )}
-          {valid.map((p) => (
-            <g
-              key={p.id}
-              className="kinetics-observation"
-              role={onSelect ? "button" : undefined}
-              tabIndex={onSelect ? 0 : undefined}
-              aria-label={`Time ${tick(p.time)} minutes, ${label} ${tick(p.value)}${p.included ? "" : ", excluded"}`}
-              onClick={() => onSelect?.(p.id)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  onSelect?.(p.id);
-                }
-              }}
-            >
-              <title>{`${tick(p.time)} min · ${tick(p.value)}${p.included ? "" : " · excluded from fit"}`}</title>
-              {p.id === activeId && (
-                <circle
-                  cx={x(p.time)}
-                  cy={y(p.value)}
-                  r={8}
+          {displayed.map((s) => (
+            <g key={s.target.id}>
+              {s.fit && (
+                <path
+                  d={curvePath(s.fit)}
+                  stroke={s.target.color}
+                  strokeWidth={1.7}
                   fill="none"
-                  stroke="#a73249"
-                  strokeOpacity={0.45}
                 />
               )}
-              <circle
-                cx={x(p.time)}
-                cy={y(p.value)}
-                r={4.5}
-                fill={p.included ? "#a73249" : "#b9c1cd"}
-                stroke="white"
-                strokeWidth={1.5}
-              />
+              {s.points
+                .filter(
+                  (p) => Number.isFinite(p.time) && Number.isFinite(p.value),
+                )
+                .map((p) => (
+                  <g
+                    key={p.id}
+                    className="kinetics-observation"
+                    role={onSelect ? "button" : undefined}
+                    tabIndex={onSelect ? 0 : undefined}
+                    aria-label={`${s.target.label}, time ${tick(p.time)} minutes, ${label} ${tick(p.value)}`}
+                    onClick={() => onSelect?.(p.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        onSelect?.(p.id);
+                      }
+                    }}
+                  >
+                    <title>{`${s.target.label} · ${tick(p.time)} min · ${tick(p.value)}${p.included ? "" : " · excluded"}`}</title>
+                    {p.id === activeId && (
+                      <circle
+                        cx={x(p.time)}
+                        cy={y(p.value)}
+                        r={8}
+                        fill="none"
+                        stroke={s.target.color}
+                        strokeOpacity={0.45}
+                      />
+                    )}
+                    <circle
+                      cx={x(p.time)}
+                      cy={y(p.value)}
+                      r={4.5}
+                      fill={p.included ? s.target.color : "#b9c1cd"}
+                      stroke="white"
+                      strokeWidth={1.5}
+                    />
+                  </g>
+                ))}
             </g>
           ))}
         </g>

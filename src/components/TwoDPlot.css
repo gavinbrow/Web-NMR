@@ -1,12 +1,27 @@
 .two-d-plot .two-d-settings-toggle {
-  position: absolute;
-  right: 8px;
-  top: 8px;
   z-index: 4;
   border: 1px solid #505a67;
   border-radius: 4px;
   background: #262b32ed;
   color: #d4dce7;
+  padding: 5px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.two-d-plot .two-d-actions {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  z-index: 4;
+  display: flex;
+  gap: 5px;
+  max-width: calc(100% - 16px);
+}
+.two-d-plot .two-d-import-trace {
+  border: 1px solid #79424a;
+  border-radius: 4px;
+  background: #3b242aed;
+  color: #f1ccd2;
   padding: 5px 8px;
   font-size: 11px;
   cursor: pointer;
@@ -36,6 +51,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  flex-wrap: wrap;
 }
 .two-d-settings input[type="number"] {
   width: 65px;

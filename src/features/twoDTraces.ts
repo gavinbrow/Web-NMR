@@ -1,6 +1,100 @@
 import type { ComplexData, Spectrum, TwoDView } from "../model";
+import type { ContourGrid } from "./contours";
 
 export type TracePoint = { ppm: number; value: number };
+
+export function traceSourceKey(
+  view: Pick<TwoDView, "topSpectrumId" | "leftSpectrumId">,
+): string {
+  return JSON.stringify([
+    view.topSpectrumId ?? null,
+    view.leftSpectrumId ?? null,
+  ]);
+}
+/** Merge external source attachments only. Outgoing snapshots are acknowledgements, even if they arrive late. */
+export function reconcileTraceSources(
+  current: TwoDView,
+  incoming: TwoDView,
+  outgoing: ReadonlySet<string>,
+): TwoDView {
+  const key = traceSourceKey(incoming);
+  if (key === traceSourceKey(current) || outgoing.has(key)) return current;
+  return {
+    ...current,
+    topSpectrumId: incoming.topSpectrumId,
+    leftSpectrumId: incoming.leftSpectrumId,
+  };
+}
+
+/** Robust display-only floor. This does not baseline-correct or change the source matrix. */
+export function projectionNoiseFloor(matrix: ContourGrid): number {
+  const samples: number[] = [],
+    stride = Math.max(1, Math.floor(matrix.real.length / 8192));
+  for (let i = 0; i < matrix.real.length; i += stride)
+    samples.push(matrix.real[i]);
+  if (!samples.length) return 0;
+  samples.sort((a, b) => a - b);
+  const center = samples[Math.floor(samples.length / 2)];
+  const deviations = samples
+    .map((value) => Math.abs(value - center))
+    .sort((a, b) => a - b);
+  return Math.max(
+    0,
+    Math.abs(center) +
+      (5 * deviations[Math.floor(deviations.length / 2)]) / 0.67449,
+  );
+}
+
+/** Positive amplitude skyline: each coordinate keeps its largest absolute crosspeak, displayed positive.
+ * Subtracting the estimated display floor removes the extreme-value noise pedestal. Negative peaks
+ * contribute positively here, but keep their signs in matrix/contours and imported 1D traces.
+ * The skyline is neither a sum nor a quantitative or phase-sensitive projection.
+ */
+export function skylineProjections(
+  matrix: ContourGrid,
+  floor?: number,
+): {
+  top: ComplexData;
+  left: ComplexData;
+  floor: number;
+  topFloor: number;
+  leftFloor: number;
+} {
+  const minimum = floor ?? projectionNoiseFloor(matrix);
+  const top = new Float64Array(matrix.width),
+    left = new Float64Array(matrix.height);
+  for (let row = 0; row < matrix.height; row++)
+    for (let col = 0; col < matrix.width; col++) {
+      const value = Math.max(
+        0,
+        Math.abs(matrix.real[row * matrix.width + col]),
+      );
+      if (value > top[col]) top[col] = value;
+      if (value > left[row]) left[row] = value;
+    }
+  // Maximum projections raise the apparent noise pedestal above the matrix's noise.
+  // Estimate that pedestal from the quiet lower quartile of each projected trace.
+  // Explicit floor=0 returns the complete unfiltered amplitude skyline.
+  const displayFloor = (values: Float64Array) =>
+    floor === undefined
+      ? Math.max(
+          minimum,
+          values.slice().sort()[Math.floor(values.length / 4)] || 0,
+        )
+      : minimum;
+  const topFloor = displayFloor(top),
+    leftFloor = displayFloor(left);
+  for (let i = 0; i < top.length; i++) top[i] = Math.max(0, top[i] - topFloor);
+  for (let i = 0; i < left.length; i++)
+    left[i] = Math.max(0, left[i] - leftFloor);
+  return {
+    top: { x: matrix.x, real: top },
+    left: { x: matrix.y, real: left },
+    floor: minimum,
+    topFloor,
+    leftFloor,
+  };
+}
 const nucleusKey = (value: string) =>
   value.replace(/[\s^<>]/g, "").toLowerCase();
 

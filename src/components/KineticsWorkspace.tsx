@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ChevronDown,
@@ -5,14 +6,18 @@ import {
   SlidersHorizontal,
   Table2,
   X,
+  Plus,
+  Trash2,
 } from "lucide-react";
 import type {
   KineticFit,
+  KineticTarget,
   KineticPoint,
   Spectrum,
   SpectrumStack,
 } from "../model";
 import type {
+  KineticSeries,
   KineticMeasurement,
   KineticsMeasurementOptions,
 } from "../features/kinetics";
@@ -21,6 +26,13 @@ import { KineticsChart } from "./KineticsChart";
 import "./KineticsWorkspace.css";
 
 interface Props {
+  targets: KineticTarget[];
+  activeTargetId: string;
+  series: KineticSeries[];
+  onTargetSelect: (id: string) => void;
+  onTargetChange: (patch: Partial<KineticTarget>, id?: string) => void;
+  onTargetAdd: () => void;
+  onTargetRemove: (id: string) => void;
   spectra: Spectrum[];
   stacks: SpectrumStack[];
   activeStackId: string | null;
@@ -63,11 +75,6 @@ const modeLabel = {
   ratio: "Standard ratio",
   concentration: "Concentration",
 };
-const modelLabel = {
-  decay: "Exponential decay",
-  growth: "Exponential growth",
-  linear: "Linear",
-};
 
 function NumericInput({
   label,
@@ -102,6 +109,11 @@ function NumericInput({
 
 export function KineticsWorkspace(p: Props) {
   const [tableOpen, setTableOpen] = useState(false);
+  const [tooltip, setTooltip] = useState<{
+    text: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const setupButton = useRef<HTMLButtonElement>(null);
   const setupPanel = useRef<HTMLDivElement>(null);
   const tableRef = useRef<HTMLDivElement>(null);
@@ -116,8 +128,13 @@ export function KineticsWorkspace(p: Props) {
       : p.settings.mode === "ratio"
         ? "Internal standard ratio"
         : `Concentration (${p.settings.concentrationUnit || "mM"})`;
+  const target = p.targets.find((t) => t.id === p.activeTargetId)!;
   const active = p.spectra.find((s) => s.id === p.activeId);
-  const enoughPoints = included >= (p.model === "linear" ? 2 : 4);
+  const enoughPoints = p.series.some(
+    (s) =>
+      s.points.filter((p) => p.included).length >=
+      (s.target.model === "linear" ? 2 : 4),
+  );
 
   useEffect(() => {
     if (!p.settingsOpen) return;
@@ -144,6 +161,8 @@ export function KineticsWorkspace(p: Props) {
     };
   }, [p.settingsOpen, p.onSettingsOpenChange]);
 
+  useEffect(() => setTooltip(null), [p.view, p.picking, p.settingsOpen]);
+
   function pick(which: "target" | "standard") {
     p.onSettingsOpenChange(false);
     p.onPick(which);
@@ -161,40 +180,39 @@ export function KineticsWorkspace(p: Props) {
     <section
       className="kinetics-workspace kinetics-studio"
       aria-label="Kinetics workspace"
+      onPointerOver={(e) => {
+        const button = (e.target as HTMLElement).closest<HTMLElement>(
+          "[data-tooltip],button[title]",
+        );
+        if (!button) {
+          setTooltip(null);
+          return;
+        }
+        const rect = button.getBoundingClientRect();
+        setTooltip({
+          text: button.dataset.tooltip ?? button.title,
+          x: Math.max(12, Math.min(window.innerWidth - 280, rect.left)),
+          y: rect.bottom + 6,
+        });
+      }}
+      onPointerOut={(e) => {
+        if (
+          !(e.target as HTMLElement)
+            .closest("button")
+            ?.contains(e.relatedTarget as Node)
+        )
+          setTooltip(null);
+      }}
+      onPointerLeave={() => setTooltip(null)}
     >
-      <header className="kinetics-studio-header">
-        <div className="kinetics-studio-title">
-          <NmrToolIcon kind="kinetics" size={25} />
-          <div>
-            <h1>Kinetics</h1>
-            <p>
-              {p.seriesLabel} · {p.spectra.length} spectra
-            </p>
-          </div>
-        </div>
-        <div className="kinetics-header-actions">
-          <button
-            className="secondary"
-            onClick={p.onExport}
-            aria-label="Export kinetics data"
-          >
-            <Download size={14} />
-            <span>Export</span>
-          </button>
-          <button
-            ref={setupButton}
-            className={`secondary ${p.settingsOpen ? "is-active" : ""}`}
-            aria-expanded={p.settingsOpen}
-            aria-controls="kinetics-setup"
-            onClick={() => p.onSettingsOpenChange(!p.settingsOpen)}
-          >
-            <SlidersHorizontal size={14} />
-            Setup
-          </button>
-        </div>
-      </header>
-
       <div className="kinetics-command-bar">
+        <span
+          className="kinetics-compact-label"
+          title={`${p.seriesLabel} · ${p.spectra.length} spectra`}
+        >
+          <NmrToolIcon kind="kinetics" size={18} />
+          <span>{p.spectra.length} spectra</span>
+        </span>
         <div
           className="kinetics-view-switch"
           role="tablist"
@@ -203,6 +221,7 @@ export function KineticsWorkspace(p: Props) {
           <button
             role="tab"
             aria-selected={p.view === "curve"}
+            data-tooltip="Compare measurements and fitted curves"
             onClick={() => {
               p.onViewChange("curve");
               p.onCancelPick();
@@ -214,47 +233,81 @@ export function KineticsWorkspace(p: Props) {
           <button
             role="tab"
             aria-selected={p.view === "spectra"}
+            data-tooltip="View spectra and drag target edges to resize"
             onClick={() => p.onViewChange("spectra")}
           >
             <NmrToolIcon kind="stack" size={17} />
             Spectra
           </button>
         </div>
-        <button
-          className="kinetics-region-chip"
-          onClick={() => pick("target")}
-          title="Draw the target region on the spectra"
-        >
-          <i />
-          {ppm(p.settings.from)}–{ppm(p.settings.to)} ppm
-        </button>
+        <div className="kinetics-target-chips" aria-label="Monitored targets">
+          {p.targets.map((t) => (
+            <button
+              key={t.id}
+              className={`kinetics-region-chip ${t.id === p.activeTargetId ? "is-selected" : ""}`}
+              style={{ "--target-color": t.color } as React.CSSProperties}
+              onClick={() => p.onTargetSelect(t.id)}
+              data-tooltip={`${t.label}: ${ppm(t.from)}–${ppm(t.to)} ppm. Select to edit or fit.`}
+              aria-pressed={t.id === p.activeTargetId}
+            >
+              <i style={{ background: t.color }} />
+              {t.label}
+            </button>
+          ))}
+          <button
+            className="kinetics-add-target"
+            aria-label="Add kinetics target"
+            data-tooltip="Add a target and draw its integral region"
+            disabled={p.targets.length >= 20}
+            onClick={p.onTargetAdd}
+          >
+            <Plus size={15} />
+          </button>
+        </div>
         {p.settings.mode !== "area" && (
           <button
             className="kinetics-region-chip standard"
             onClick={() => pick("standard")}
-            title="Draw the internal standard region"
+            data-tooltip="Draw or resize the internal standard region"
           >
             <i />
-            Standard {ppm(p.settings.standardFrom ?? 0)}–
-            {ppm(p.settings.standardTo ?? 0)}
+            Standard
           </button>
         )}
-        <span className="kinetics-mode-label">
-          {modeLabel[p.settings.mode]}
-        </span>
-        <button
-          className="primary kinetics-fit-button"
-          onClick={p.onFit}
-          disabled={!enoughPoints}
-          title={
-            !enoughPoints
-              ? `Set times and include at least ${p.model === "linear" ? 2 : 4} points`
-              : `Fit ${modelLabel[p.model].toLowerCase()}`
-          }
-        >
-          <NmrToolIcon kind="fitCurve" size={17} />
-          Fit curve
-        </button>
+        <div className="kinetics-header-actions">
+          <button
+            className="primary kinetics-fit-button"
+            onClick={p.onFit}
+            disabled={!enoughPoints}
+            data-tooltip={
+              !enoughPoints
+                ? `Set times and include at least ${p.model === "linear" ? 2 : 4} points`
+                : "Fit all target curves using each target’s model"
+            }
+          >
+            <NmrToolIcon kind="fitCurve" size={17} />
+            <span>Fit all</span>
+          </button>
+          <button
+            className="secondary"
+            onClick={p.onExport}
+            aria-label="Export kinetics data"
+            data-tooltip="Export all target measurements, settings and fits as CSV"
+          >
+            <Download size={14} />
+          </button>
+          <button
+            ref={setupButton}
+            className={`secondary ${p.settingsOpen ? "is-active" : ""}`}
+            aria-expanded={p.settingsOpen}
+            aria-controls="kinetics-setup"
+            data-tooltip="Target regions, internal standard and fit models"
+            onClick={() => p.onSettingsOpenChange(!p.settingsOpen)}
+          >
+            <SlidersHorizontal size={14} />
+            Setup
+          </button>
+        </div>
       </div>
 
       <div
@@ -274,20 +327,22 @@ export function KineticsWorkspace(p: Props) {
                 </span>
               </span>
               <div className="kinetics-legend">
-                <span>
-                  <i />
-                  Measurements
-                </span>
-                {p.fit && (
-                  <span className="fit">
-                    <i />
-                    {modelLabel[p.model]}
-                  </span>
-                )}
+                {p.series.map((series) => (
+                  <button
+                    key={series.target.id}
+                    onClick={() => p.onTargetSelect(series.target.id)}
+                    title={`Select ${series.target.label}`}
+                  >
+                    <i style={{ background: series.target.color }} />
+                    {series.target.label}
+                    {series.fit ? " · fit" : ""}
+                  </button>
+                ))}
               </div>
             </div>
-            {p.points.length ? (
+            {p.series.some((series) => series.points.length) ? (
               <KineticsChart
+                series={p.series}
                 points={p.points}
                 fit={p.fit}
                 label={label}
@@ -343,7 +398,7 @@ export function KineticsWorkspace(p: Props) {
               <span>
                 {p.picking
                   ? `Drag across the ${p.picking === "target" ? "target signal" : "internal standard"}.`
-                  : "Z to zoom · I to measure · scroll to adjust height"}
+                  : "Z to zoom · I to redraw target · drag region edges to resize"}
               </span>
               {p.picking && (
                 <button
@@ -368,8 +423,11 @@ export function KineticsWorkspace(p: Props) {
           </button>
         </div>
       )}
-      {p.fit && (
+      {p.fit && p.view === "curve" && (
         <div className="kinetics-results-strip" aria-label="Fit results">
+          <span style={{ color: target.color }}>
+            <b>{target.label}</b>
+          </span>
           <span>
             R² <b>{p.fit.rSquared.toFixed(5)}</b>
           </span>
@@ -570,12 +628,57 @@ export function KineticsWorkspace(p: Props) {
             </section>
             <section>
               <div className="kinetics-section-heading">
-                <h3>Target signal</h3>
-                <button onClick={() => pick("target")}>
+                <h3>Target signals</h3>
+                <button
+                  title="Draw the selected target region across all spectra"
+                  onClick={() => pick("target")}
+                >
                   <NmrToolIcon kind="integral" size={17} />
                   Draw region
                 </button>
               </div>
+              <div className="kinetics-target-editor">
+                <label className="field">
+                  <span>Selected target</span>
+                  <select
+                    aria-label="Selected target"
+                    value={p.activeTargetId}
+                    onChange={(e) => p.onTargetSelect(e.target.value)}
+                  >
+                    {p.targets.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="kinetics-target-editor-actions">
+                  <button
+                    data-tooltip="Add another monitored signal"
+                    aria-label="Add target in setup"
+                    onClick={p.onTargetAdd}
+                  >
+                    <Plus size={14} />
+                  </button>
+                  <button
+                    data-tooltip="Remove selected target"
+                    aria-label="Remove kinetics target"
+                    disabled={p.targets.length === 1}
+                    onClick={() => p.onTargetRemove(target.id)}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+              <label className="field">
+                <span>Target name</span>
+                <input
+                  aria-label="Target name"
+                  value={target.label}
+                  maxLength={80}
+                  onChange={(e) => p.onTargetChange({ label: e.target.value })}
+                />
+              </label>
               <div className="kinetics-field-pair">
                 <NumericInput
                   label="Target from (ppm)"
@@ -615,7 +718,7 @@ export function KineticsWorkspace(p: Props) {
               )}
             </section>
             <section>
-              <h3>Comparison</h3>
+              <h3>Comparison · all targets</h3>
               <label className="field">
                 <span>Measurement</span>
                 <select
@@ -639,7 +742,10 @@ export function KineticsWorkspace(p: Props) {
                 <>
                   <div className="kinetics-section-heading">
                     <h4>Internal standard</h4>
-                    <button onClick={() => pick("standard")}>
+                    <button
+                      title="Draw the internal standard region across all spectra"
+                      onClick={() => pick("standard")}
+                    >
                       <NmrToolIcon kind="integral" size={17} />
                       Draw region
                     </button>
@@ -726,9 +832,9 @@ export function KineticsWorkspace(p: Props) {
               </p>
             </section>
             <section>
-              <h3>Curve fit</h3>
+              <h3>Fit for {target.label}</h3>
               <label className="field">
-                <span>Model</span>
+                <span>Model for selected target</span>
                 <select
                   aria-label="Model"
                   value={p.model}
@@ -759,6 +865,17 @@ export function KineticsWorkspace(p: Props) {
           </div>
         </div>
       )}
+      {tooltip &&
+        createPortal(
+          <div
+            className="kinetics-floating-tooltip"
+            role="tooltip"
+            style={{ left: tooltip.x, top: tooltip.y }}
+          >
+            {tooltip.text}
+          </div>,
+          document.body,
+        )}
     </section>
   );
 }

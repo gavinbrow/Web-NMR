@@ -636,3 +636,106 @@
     font-size: 10px;
   }
 }
+
+/* One compact command row leaves the canvas as the main surface. */
+.kinetics-command-bar {
+  flex-wrap: nowrap;
+  padding: 5px 8px;
+  gap: 6px;
+}
+.kinetics-compact-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  color: #a9b5c5;
+  font-size: 10px;
+}
+.kinetics-target-chips {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  flex: 1;
+}
+.kinetics-region-chip.is-selected {
+  border-color: var(--target-color);
+  box-shadow: inset 0 -2px var(--target-color);
+  color: white;
+}
+.kinetics-add-target {
+  flex: none;
+  color: #c5d2e2;
+  display: grid;
+  place-items: center;
+  padding: 5px;
+  border: 1px solid #465260;
+  border-radius: 4px;
+}
+.kinetics-header-actions {
+  margin-left: auto;
+  gap: 4px;
+}
+.kinetics-header-actions button {
+  height: 28px;
+  padding: 0 7px;
+}
+.kinetics-fit-button {
+  margin-left: 0;
+}
+.kinetics-legend button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: #687489;
+}
+.kinetics-target-editor {
+  display: flex;
+  align-items: end;
+  gap: 6px;
+}
+.kinetics-target-editor .field {
+  flex: 1;
+  min-width: 0;
+}
+.kinetics-target-editor-actions {
+  display: flex;
+  padding-bottom: 8px;
+  gap: 4px;
+}
+.kinetics-target-editor-actions button {
+  padding: 7px;
+  background: #343c48;
+  border-radius: 3px;
+}
+.kinetics-floating-tooltip {
+  position: fixed;
+  background: #181c22;
+  border: 1px solid #596576;
+  color: #e7edf6;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 11px;
+  font-weight: 400;
+  max-width: 270px;
+  z-index: 1000;
+  pointer-events: none;
+  box-shadow: 0 4px 12px #0006;
+}
+@container (max-width:700px) {
+  .kinetics-compact-label span {
+    display: none;
+  }
+  .kinetics-header-actions .kinetics-fit-button span {
+    display: none;
+  }
+  .kinetics-header-actions button {
+    padding: 0 5px;
+  }
+  .kinetics-region-chip {
+    padding: 4px 6px;
+  }
+}
