@@ -695,8 +695,11 @@ export function downloadBlob(blob: Blob, filename: string) {
     a = document.createElement("a");
   a.href = url;
   a.download = safeFilename(filename);
+  a.style.display = "none";
+  document.body.appendChild(a);
   a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 export async function downloadProject(project: Project) {
   const bytes = await encodeProject(project);
