@@ -2,7 +2,6 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Activity,
   ArrowDown,
-  ArrowLeft,
   ArrowRight,
   ArrowUp,
   BarChart3,
@@ -35,8 +34,6 @@ import {
   SlidersHorizontal,
   Sparkles,
   Trash2,
-  Undo2,
-  Redo2,
   Upload,
   Waves,
   X,
@@ -167,6 +164,44 @@ const ribbonIcon: Record<string, NmrIconKind> = {
   "Mass integral": "integral",
   Multiplets: "multiplet",
   "Auto multiplets": "autoMultiplet",
+  Select: "select",
+  Zoom: "zoom",
+  Pan: "pan",
+  "Full spectrum": "full",
+  "Height +": "increase",
+  "Height −": "decrease",
+  "Gain +": "increase",
+  "Gain −": "decrease",
+  "Fit height": "fitHeight",
+  "Auto normalize all": "normalize",
+  "Stack selected": "stack",
+  "Show stack": "stack",
+  Overlay: "overlay",
+  "Active only": "spectrum",
+  "Align spectra": "align",
+  Kinetics: "kinetics",
+  "Fit curve": "fitCurve",
+  "Measure region": "integral",
+  "Open files": "open",
+  "Open folder": "open",
+  "Save project": "save",
+  "Open project": "openProject",
+  "Example project": "stack",
+  Duplicate: "duplicate",
+  "Duplicate spectrum": "duplicate",
+  "Remove spectrum": "remove",
+  "Clear analysis": "remove",
+  "Move up": "moveUp",
+  "Move down": "moveDown",
+  "Integral controls": "integralControls",
+  "Integral table": "table",
+  "Reset processing": "reset",
+  "SVG figure": "svg",
+  "PNG image": "png",
+  "Print / PDF": "print",
+  "Spectrum CSV": "export",
+  "JCAMP-DX": "export",
+  "Export kinetics": "export",
 };
 function RibbonButton({
   icon: Icon,
@@ -2562,7 +2597,7 @@ export default function App() {
               onClick={undo}
               disabled={!undoRef.current.length}
             >
-              <Undo2 size={17} />
+              <NmrToolIcon kind="undo" size={17} />
             </button>
             <button
               className="icon-button"
@@ -2571,7 +2606,7 @@ export default function App() {
               onClick={redo}
               disabled={!redoRef.current.length}
             >
-              <Redo2 size={17} />
+              <NmrToolIcon kind="redo" size={17} />
             </button>
           </div>
           <span>Undo / redo</span>
@@ -3665,15 +3700,15 @@ export default function App() {
           <div className="tool-rail">
             {(
               [
-                { t: "select", i: MousePointer2, key: "" },
-                { t: "zoom", i: ZoomIn, key: "Z" },
-                { t: "pan", i: Hand, key: "Space" },
-                { t: "peak", i: Activity, key: "K" },
-                { t: "integral", i: BarChart3, key: "I" },
-                { t: "multiplet", i: Waves, key: "J" },
-                { t: "reference", i: ListFilter, key: "R" },
-              ] as { t: Tool; i: LucideIcon; key: string }[]
-            ).map(({ t, i: Icon, key }) => (
+                { t: "select", key: "" },
+                { t: "zoom", key: "Z" },
+                { t: "pan", key: "Space" },
+                { t: "peak", key: "K" },
+                { t: "integral", key: "I" },
+                { t: "multiplet", key: "J" },
+                { t: "reference", key: "R" },
+              ] as { t: Tool; key: string }[]
+            ).map(({ t, key }) => (
               <button
                 className={tool === t ? "active" : ""}
                 key={t}
@@ -3697,11 +3732,7 @@ export default function App() {
                   )
                 }
               >
-                {["peak", "integral", "multiplet", "reference"].includes(t) ? (
-                  <NmrToolIcon kind={t as NmrIconKind} size={18} />
-                ) : (
-                  <Icon size={18} />
-                )}
+                <NmrToolIcon kind={t as NmrIconKind} size={18} />
               </button>
             ))}
             <span />
@@ -3710,14 +3741,14 @@ export default function App() {
               aria-label="Full spectrum"
               onClick={full}
             >
-              <Maximize2 size={17} />
+              <NmrToolIcon kind="full" size={18} />
             </button>
             <button
               data-tooltip="Previous view · Shift Left"
               aria-label="Previous view"
               onClick={previousView}
             >
-              <ArrowLeft size={17} />
+              <NmrToolIcon kind="previous" size={18} />
             </button>
             <button
               data-tooltip="Increase height"
