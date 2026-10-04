@@ -442,6 +442,24 @@
   border-radius: 50%;
   flex: none;
 }
+.kinetics-spectrum-description {
+  display: grid;
+  gap: 3px;
+  min-width: 160px;
+  max-width: 330px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.kinetics-spectrum-description small {
+  color: #aab9ca;
+  font-size: 10px;
+  line-height: 1.4;
+  white-space: pre-line;
+}
+.kinetics-spectrum-description small.kinetics-stack-membership {
+  color: #c5a9b5;
+  font-size: 9px;
+}
 .kinetics-data-table .measurement-status {
   max-width: 280px;
   font-size: 10px;
@@ -651,6 +669,33 @@
   color: #a9b5c5;
   font-size: 10px;
 }
+.kinetics-source-picker {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex: 0 1 235px;
+}
+.kinetics-source-picker > svg {
+  flex: none;
+}
+.kinetics-source-picker select {
+  width: 100%;
+  min-width: 0;
+  padding: 5px 4px;
+  height: 28px;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  color: #d6e1ef;
+  background: #20242b;
+  border: 1px solid #465260;
+  border-radius: 4px;
+}
+@media (max-width: 900px) {
+  .kinetics-source-picker {
+    flex-basis: 170px;
+  }
+}
 .kinetics-target-chips {
   display: flex;
   align-items: center;
@@ -659,6 +704,7 @@
   overflow-x: auto;
   scrollbar-width: thin;
   flex: 1;
+  min-width: 90px;
 }
 .kinetics-region-chip.is-selected {
   border-color: var(--target-color);

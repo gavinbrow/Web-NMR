@@ -511,6 +511,11 @@ export function validateProject(value: unknown): asserts value is Project {
     );
     const targetIds = new Set<string>();
     assert(
+      k.seriesSource === undefined ||
+        ["document", "custom"].includes(k.seriesSource),
+      "Invalid kinetics series source.",
+    );
+    assert(
       k.fitEnabled === undefined || typeof k.fitEnabled === "boolean",
       "Invalid kinetics fit setting.",
     );

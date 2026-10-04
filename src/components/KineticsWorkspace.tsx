@@ -14,8 +14,9 @@ import type {
   KineticTarget,
   KineticPoint,
   Spectrum,
-  SpectrumStack,
 } from "../model";
+import type { KineticsSource } from "../features/kineticsSources";
+import { spectrumText, spectrumDescription } from "../features/spectrumText";
 import type {
   KineticSeries,
   KineticMeasurement,
@@ -35,8 +36,8 @@ interface Props {
   onTargetAdd: () => void;
   onTargetRemove: (id: string) => void;
   spectra: Spectrum[];
-  stacks: SpectrumStack[];
-  activeStackId: string | null;
+  sources: KineticsSource[];
+  sourceId: string;
   activeId: string;
   seriesLabel: string;
   settings: KineticsMeasurementOptions;
@@ -140,6 +141,28 @@ export function KineticsWorkspace(p: Props) {
       s.points.filter((p) => p.included).length >=
       (s.target.model === "linear" ? 2 : 4),
   );
+  const sourceOptions = (
+    <>
+      {p.sources
+        .filter((s) => s.kind !== "stack")
+        .map((source) => (
+          <option key={source.id} value={source.id}>
+            {source.label} · {source.spectra.length} spectra
+          </option>
+        ))}
+      {p.sources.some((s) => s.kind === "stack") && (
+        <optgroup label="Stacks · measure members separately">
+          {p.sources
+            .filter((s) => s.kind === "stack")
+            .map((source) => (
+              <option key={source.id} value={source.id}>
+                Stack · {source.label} · {source.spectra.length} members
+              </option>
+            ))}
+        </optgroup>
+      )}
+    </>
+  );
 
   useEffect(() => {
     if (!p.settingsOpen) return;
@@ -211,13 +234,19 @@ export function KineticsWorkspace(p: Props) {
       onPointerLeave={() => setTooltip(null)}
     >
       <div className="kinetics-command-bar">
-        <span
-          className="kinetics-compact-label"
-          title={`${p.seriesLabel} · ${p.spectra.length} spectra`}
+        <label
+          className="kinetics-source-picker"
+          title="Choose document spectra or one stack. Saved stack copies stay in their own series."
         >
           <NmrToolIcon kind="kinetics" size={18} />
-          <span>{p.spectra.length} spectra</span>
-        </span>
+          <select
+            aria-label="Kinetics spectrum source"
+            value={p.sourceId}
+            onChange={(e) => p.onSeriesChange(e.target.value)}
+          >
+            {sourceOptions}
+          </select>
+        </label>
         <div
           className="kinetics-view-switch"
           role="tablist"
@@ -523,6 +552,12 @@ export function KineticsWorkspace(p: Props) {
             </thead>
             <tbody>
               {p.spectra.map((s) => {
+                const text = spectrumText(s);
+                const membership = p.sources.filter(
+                  (source) =>
+                    source.kind === "stack" &&
+                    source.spectra.some((member) => member.id === s.id),
+                );
                 const row = p.measurements.find((m) => m.id === s.id);
                 const index = p.points.findIndex((point) => point.id === s.id);
                 return (
@@ -543,9 +578,21 @@ export function KineticsWorkspace(p: Props) {
                       <button
                         className="kinetics-spectrum-link"
                         onClick={() => p.onSelect(s.id)}
+                        title={spectrumDescription(s)}
                       >
                         <i style={{ background: s.color }} />
-                        {s.label}
+                        <span className="kinetics-spectrum-description">
+                          <span>{text.title}</span>
+                          {text.comments && <small>{text.comments}</small>}
+                          {membership.length > 0 && (
+                            <small className="kinetics-stack-membership">
+                              In stack ·{" "}
+                              {membership
+                                .map((source) => source.label)
+                                .join("; ")}
+                            </small>
+                          )}
+                        </span>
                       </button>
                     </td>
                     <td>
@@ -722,19 +769,16 @@ export function KineticsWorkspace(p: Props) {
                 <span>Spectra to measure</span>
                 <select
                   aria-label="Spectra to measure"
-                  value={p.activeStackId ?? ""}
+                  value={p.sourceId}
                   onChange={(e) => p.onSeriesChange(e.target.value)}
                 >
-                  <option value="">
-                    All {p.settings.nucleus ?? "1D"} spectra
-                  </option>
-                  {p.stacks.map((stack) => (
-                    <option key={stack.id} value={stack.id}>
-                      {stack.label} · {stack.spectrumIds.length} spectra
-                    </option>
-                  ))}
+                  {sourceOptions}
                 </select>
               </label>
+              <p className="kinetics-setup-note">
+                Document spectra excludes copies stored inside imported stacks.
+                Choose a stack to measure just its members, in saved order.
+              </p>
             </section>
             <section>
               <div className="kinetics-section-heading">

@@ -114,6 +114,10 @@ import {
 } from "./features/export";
 import { measureKineticTargets } from "./features/kinetics";
 import {
+  kineticsSources,
+  restoredKineticsSource,
+} from "./features/kineticsSources";
+import {
   defaultTimeFill,
   generateTimePoints,
   type TimeFill,
@@ -671,6 +675,9 @@ export default function App() {
     [fitEnabled, setFitEnabled] = useState(false);
   const [timeFill, setTimeFill] = useState<TimeFill>(defaultTimeFill);
   const [kinSeriesIds, setKinSeriesIds] = useState<string[] | null>(null);
+  const [kinSeriesSource, setKinSeriesSource] = useState<"document" | "custom">(
+    "document",
+  );
   function kineticsConfiguration(): KineticsConfiguration {
     return {
       targets: kinTargets,
@@ -685,16 +692,11 @@ export default function App() {
       view: kinView,
       fitEnabled,
       timeFill,
-      seriesSpectrumIds: (activeStack
-        ? activeStack.spectrumIds
-        : (kinSeriesIds ??
-          spectra
-            .filter((s) => !s.twoD && s.nucleus === active?.nucleus)
-            .map((s) => s.id))
-      ).filter((id) => spectra.some((s) => s.id === id)),
+      seriesSpectrumIds: kineticSpectra.map((s) => s.id),
+      seriesSource: kinSeriesSource,
     };
   }
-  function restoreKinetics(config?: KineticsConfiguration) {
+  function restoreKinetics(config?: KineticsConfiguration, project?: Project) {
     setKinTargets(
       config?.targets ?? [
         {
@@ -721,7 +723,16 @@ export default function App() {
     setKinSettingsOpen(false);
     setFitEnabled(config?.fitEnabled ?? false);
     setTimeFill(config?.timeFill ?? defaultTimeFill());
-    setKinSeriesIds(config?.seriesSpectrumIds ?? null);
+    const source = restoredKineticsSource(
+      project?.spectra ?? [],
+      project?.stacks ?? [],
+      config?.seriesSpectrumIds,
+      config?.seriesSource,
+    );
+    setKinSeriesSource(source);
+    setKinSeriesIds(
+      source === "custom" ? (config?.seriesSpectrumIds ?? null) : null,
+    );
   }
   function addKineticTarget() {
     if (kinTargets.length >= 20) return;
@@ -764,6 +775,27 @@ export default function App() {
         .map((id) => spectra.find((s) => s.id === id))
         .filter((s): s is Spectrum => !!s)
     : [];
+  const kineticSources = useMemo(() => {
+    const sources = kineticsSources(spectra, stacks, active?.nucleus);
+    if (kinSeriesIds?.length) {
+      const byId = new Map(spectra.map((s) => [s.id, s]));
+      const members = kinSeriesIds
+        .map((id) => byId.get(id))
+        .filter((s): s is Spectrum => !!s && !s.twoD);
+      if (members.length)
+        sources.push({
+          id: "custom",
+          kind: "custom",
+          label: "Saved selection",
+          spectra: members,
+        });
+    }
+    return sources;
+  }, [spectra, stacks, active?.nucleus, kinSeriesIds]);
+  const kineticSource =
+    kineticSources.find((s) => s.id === (activeStackId ?? kinSeriesSource)) ??
+    kineticSources[0];
+  const kineticSpectra = kineticSource.spectra;
   const activeProperties = useMemo(
     () => ({ ...properties, ...active?.properties }),
     [properties, active?.properties],
@@ -1143,6 +1175,7 @@ export default function App() {
     kinView,
     timeFill,
     kinSeriesIds,
+    kinSeriesSource,
     plotGain,
     component,
     tab,
@@ -1393,7 +1426,7 @@ export default function App() {
   function restoreProjectState(p: Project) {
     setOriginalMnova(p.originalMnova);
     setExpandedStacks([]);
-    restoreKinetics(p.kinetics);
+    restoreKinetics(p.kinetics, p);
     setSpectra(p.spectra);
     setStacks(p.stacks ?? []);
     setActiveStackId(p.activeStackId ?? null);
@@ -2496,7 +2529,7 @@ export default function App() {
         reportImagesZip,
       } = await import("./features/kineticsReport");
       const series = measureKineticTargets(
-        spectra,
+        kineticSpectra,
         kinTargets,
         kineticOptions,
         true,
@@ -2645,24 +2678,13 @@ export default function App() {
       ].join(":"),
     )
     .join("|");
-  const kineticSpectra = useMemo(
-    () =>
-      activeStack
-        ? stackMembers
-        : spectra.filter(
-            (s) =>
-              !s.twoD &&
-              (kinSeriesIds?.length
-                ? kinSeriesIds.includes(s.id)
-                : s.nucleus === active?.nucleus),
-          ),
-    [spectra, activeStack, active?.nucleus, kinSeriesIds],
-  );
   const kineticProperties = useMemo(
     () => ({
       ...activeProperties,
       stackHorizontalOffset: 0,
       horizontalUnits: "ppm" as const,
+      title: false,
+      stackLabels: true,
     }),
     [activeProperties],
   );
@@ -2721,7 +2743,12 @@ export default function App() {
   );
   const kineticSeries = useMemo(
     () =>
-      measureKineticTargets(spectra, kinTargets, kineticOptions, fitEnabled),
+      measureKineticTargets(
+        kineticSpectra,
+        kinTargets,
+        kineticOptions,
+        fitEnabled,
+      ),
     [measurementSignature, kinTargets, kineticOptions, fitEnabled],
   );
   const activeKineticSeries = kineticSeries.find(
@@ -4049,22 +4076,27 @@ export default function App() {
                 setFitEnabled(false);
               }}
               spectra={kineticSpectra}
-              stacks={stacks}
-              activeStackId={activeStackId}
+              sources={kineticSources}
+              sourceId={kineticSource.id}
               activeId={activeId}
-              seriesLabel={
-                activeStack?.label ??
-                `All ${kineticSpectra[0]?.nucleus ?? active?.nucleus ?? "1D"} spectra`
-              }
+              seriesLabel={kineticSource.label}
               settings={kineticOptions}
               onSettingsChange={updateKineticSettings}
               onSeriesChange={(id) => {
                 const stack = stacks.find((s) => s.id === id);
+                const source = kineticSources.find((s) => s.id === id);
                 setActiveStackId(stack?.id ?? null);
-                setKinSeriesIds(null);
+                setKinSeriesSource(id === "custom" ? "custom" : "document");
                 setSelectedStackId(stack?.id ?? null);
-                if (stack && !stack.spectrumIds.includes(activeId))
-                  setActiveId(stack.spectrumIds[0]);
+                if (
+                  source?.spectra.length &&
+                  !source.spectra.some((s) => s.id === activeId)
+                )
+                  setActiveId(
+                    source.spectra.find((s) => s.id === stack?.referenceId)
+                      ?.id ?? source.spectra[0].id,
+                  );
+                setSelected([]);
                 setMode(stack ? "stack" : "single");
                 setKinPicking(null);
                 setFitEnabled(false);
@@ -4188,6 +4220,7 @@ export default function App() {
                     active={displayedActive}
                     view={view}
                     mode="stack"
+                    stackComments
                     normalization={normalization}
                     tool={
                       kinPicking

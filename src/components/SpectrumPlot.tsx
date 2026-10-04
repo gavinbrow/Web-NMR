@@ -6,6 +6,7 @@ import { spectrumText } from "../features/spectrumText";
 import { snapReferencePeak } from "../features/reference";
 
 interface Props {
+  stackComments?: boolean;
   regions?: {
     id?: string;
     from: number;
@@ -1218,12 +1219,34 @@ export function SpectrumPlot(p: Props) {
               <text
                 key={t.s.id}
                 x={pad.l + pw - 8}
-                y={t.base - 9}
+                y={
+                  t.base -
+                  (p.stackComments && spectrumText(t.s).comments ? 23 : 9)
+                }
                 textAnchor="end"
                 fontSize="10"
                 fill={t.s.color}
+                stroke={p.stackComments ? "white" : undefined}
+                strokeWidth={p.stackComments ? 3 : undefined}
+                paintOrder="stroke"
+                data-spectrum-label={t.s.id}
               >
-                {t.s.label}
+                <title>
+                  {[spectrumText(t.s).title, spectrumText(t.s).comments]
+                    .filter(Boolean)
+                    .join("\n")}
+                </title>
+                <tspan>
+                  {p.stackComments ? spectrumText(t.s).title : t.s.label}
+                </tspan>
+                {p.stackComments && spectrumText(t.s).comments && (
+                  <tspan x={pad.l + pw - 8} dy="12" fontSize="9">
+                    {spectrumText(t.s)
+                      .comments.split("\n")
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </tspan>
+                )}
               </text>
             ))}
         </g>

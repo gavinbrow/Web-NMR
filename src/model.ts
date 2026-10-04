@@ -256,6 +256,7 @@ export interface KineticsConfiguration {
   view: "curve" | "spectra";
   fitEnabled?: boolean;
   seriesSpectrumIds?: string[];
+  seriesSource?: "document" | "custom";
   timeFill?: {
     pattern: "doubling" | "linear" | "custom";
     start: number;

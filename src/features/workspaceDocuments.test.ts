@@ -268,6 +268,7 @@ describe("portable project kinetics configuration", () => {
     concentrationUnit: "mM",
     excludedIds: [],
     view: "spectra",
+    seriesSource: "document",
   };
   it("round-trips kinetic targets and supports legacy projects without settings", async () => {
     const p = populated("A");
@@ -287,10 +288,22 @@ describe("portable project kinetics configuration", () => {
       { ...config, targets: [{ ...config.targets[0], color: "<script>" }] },
       { ...config, standardTo: config.standardFrom },
       { ...config, standardConcentration: NaN },
+      { ...config, seriesSource: "unknown" },
     ]) {
       const p = populated("A");
-      p.kinetics = kinetics;
+      p.kinetics = kinetics as KineticsConfiguration;
       await expect(encodeProject(p)).rejects.toThrow("kinetic");
     }
+  });
+  it("retains an explicitly saved kinetics subset and its source after reopening", async () => {
+    const p = populated("Selection");
+    p.kinetics = {
+      ...config,
+      seriesSource: "custom",
+      seriesSpectrumIds: [p.spectra[0].id],
+    };
+    expect((await decodeProject(await encodeProject(p))).kinetics).toEqual(
+      p.kinetics,
+    );
   });
 });
