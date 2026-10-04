@@ -10,6 +10,11 @@ import {
   type Spectrum,
 } from "../model";
 import { processSpectrum } from "./numerics";
+import {
+  maximumProjection,
+  processRawTwoDMagnitude,
+  readProcessedTwoD,
+} from "./twoD";
 
 type Params = Record<string, string | number>;
 const decoder = new TextDecoder();
@@ -340,6 +345,23 @@ export function importEntries(input: ImportEntry[]): ImportResult {
     files.has(path)
       ? parseBrukerParameters(decoder.decode(files.get(path)))
       : undefined;
+  const titleMetadata = (root: string, processingPath?: string): Params => {
+    const buffer =
+      (processingPath && files.get(join(processingPath, "title"))) ||
+      files.get(join(root, "title"));
+    if (!buffer) return {};
+    const lines = decoder
+      .decode(buffer)
+      .replace(/^\uFEFF/, "")
+      .replace(/\r\n?/g, "\n")
+      .trim()
+      .split("\n");
+    return {
+      title: (lines[0] || "").slice(0, 100_000),
+      comments: lines.slice(1).join("\n").slice(0, 100_000),
+      sourceTitle: lines.join("\n").slice(0, 100_000),
+    };
+  };
   const roots = new Set<string>();
   for (const path of files.keys()) {
     if (["acqus", "fid", "ser", "acqu2s"].includes(basename(path)))
@@ -367,9 +389,105 @@ export function importEntries(input: ImportEntry[]): ImportResult {
         files.has(join(root, "acqu2s")) ||
         processedPaths.some((p) => basename(p) === "2rr")
       ) {
-        warnings.push(
-          `${label}: multidimensional or series ser data detected. 2D processing is not supported; no data were flattened.`,
+        const acquisition = params(join(root, "acqus")),
+          acquisitionF1 = params(join(root, "acqu2s"));
+        const planePath = processedPaths.find(
+            (path) => basename(path) === "2rr",
+          ),
+          processingPath = planePath ? dirname(planePath) : undefined;
+        const p2 = processingPath
+          ? params(join(processingPath, "procs"))
+          : params(join(root, "pdata/1/procs"));
+        const p1 = processingPath
+          ? params(join(processingPath, "proc2s"))
+          : params(join(root, "pdata/1/proc2s"));
+        const title = titleMetadata(root, processingPath),
+          experiment = String(
+            acquisition?.PULPROG || title.comments || "2D NMR",
+          );
+        if (
+          files.has(join(root, "acqu3s")) ||
+          (processingPath && files.has(join(processingPath, "proc3s")))
+        )
+          throw new Error(
+            "3D and higher spectra are not supported. Import a processed 2D plane.",
+          );
+        let twoD;
+        if (planePath) {
+          if (!p2 || !p1)
+            throw new Error(
+              "Processed 2rr requires matching procs and proc2s parameters.",
+            );
+          twoD = readProcessedTwoD(
+            {
+              rr: files.get(planePath)!,
+              ri: files.get(join(processingPath!, "2ri")),
+              ir: files.get(join(processingPath!, "2ir")),
+              ii: files.get(join(processingPath!, "2ii")),
+            },
+            p2,
+            p1,
+            acquisitionF1,
+            experiment,
+          );
+        } else {
+          const ser = files.get(join(root, "ser"));
+          if (!ser || !acquisition || !acquisitionF1)
+            throw new Error(
+              "Raw ser requires acqus and acqu2s, or upload processed 2rr + procs + proc2s. No data were flattened.",
+            );
+          twoD = processRawTwoDMagnitude(
+            ser,
+            acquisition,
+            acquisitionF1,
+            p2,
+            p1,
+            experiment,
+          );
+          warnings.push(
+            `${label}: raw ${twoD.acquisitionMode} transformed as a 2D magnitude spectrum. Peak signs and phase-sensitive intensities are not preserved; use processed 2rr for absorption contours.`,
+          );
+        }
+        const frequency = p2
+            ? number(p2, "SF", true)
+            : number(acquisition!, "SFO1", true),
+          projection = maximumProjection(twoD);
+        const metadata: Params = {
+          ...(acquisition || {}),
+          ...(p2 || {}),
+          ...Object.fromEntries(
+            Object.entries(acquisitionF1 || {}).map(([key, value]) => [
+              `F1_${key}`,
+              value,
+            ]),
+          ),
+          ...title,
+          importPath: root,
+          processingPath: processingPath || "raw ser magnitude",
+          dimensions: 2,
+          projection: "F2 maximum absolute intensity, retaining sign",
+          twoDProcessing: twoD.source,
+        };
+        const spectrum = createSpectrum(
+          label,
+          twoD.source,
+          projection,
+          metadata,
+          frequency,
+          String(acquisition?.NUC1 || p2?.AXNUC || "unknown"),
+          spectra.length,
         );
+        spectrum.twoD = twoD;
+        spectrum.history.push(
+          planePath
+            ? "Imported processed 2D matrix; vendor phase and baseline preserved"
+            : "Raw States/States-TPPI digital filter, per-dimension FT and magnitude",
+        );
+        spectra.push(spectrum);
+        if (processedPaths.length > 1)
+          warnings.push(
+            `${label}: ${processedPaths.length} processing versions found; opened ${processingPath}.`,
+          );
         continue;
       }
       const a = params(join(root, "acqus")),
@@ -393,6 +511,7 @@ export function importEntries(input: ImportEntry[]): ImportResult {
         importPath: root,
         processingPath: processed ? dirname(processed) : "raw",
         digitalFilterMethod: "integer GRPDLY truncation with tail compensation",
+        ...titleMetadata(root, processed ? dirname(processed) : undefined),
       };
       const data = processed
         ? readProcessed(

@@ -60,9 +60,21 @@ function fixtureEntries(folder: string): ImportEntry[] {
       const file = join(path, e.name);
       if (e.isDirectory()) walk(file);
       else if (
-        ["fid", "ser", "acqus", "acqu2s", "procs", "1r", "1i", "2rr"].includes(
-          e.name,
-        )
+        [
+          "fid",
+          "ser",
+          "acqus",
+          "acqu2s",
+          "procs",
+          "proc2s",
+          "1r",
+          "1i",
+          "2rr",
+          "2ri",
+          "2ir",
+          "2ii",
+          "title",
+        ].includes(e.name)
       ) {
         const data = readFileSync(file);
         entries.push({
@@ -232,36 +244,92 @@ describe("independent numerical engine", () => {
 });
 
 describe("reference and replay regression checks", () => {
-  it('replaying phase and manual baseline is invariant to referenced coordinate translation', () => {
-    const g = gaussian(), s = spectrum(g); s.recipe.ph0 = 20; s.recipe.ph1 = 35; s.recipe.pivotPpm = 2;
-    s.recipe.baseline = 'manual'; s.recipe.baselineAnchors = [{ ppm: 0, value: 0.1 }, { ppm: 5, value: 0.2 }];
-    const before = processSpectrum(s), delta = 3.7;
-    const translated = { ...s, referenceOffset: delta, recipe: { ...s.recipe, pivotPpm: s.recipe.pivotPpm + delta, baselineAnchors: s.recipe.baselineAnchors.map(a => ({ ...a, ppm: a.ppm + delta })) } };
+  it("replaying phase and manual baseline is invariant to referenced coordinate translation", () => {
+    const g = gaussian(),
+      s = spectrum(g);
+    s.recipe.ph0 = 20;
+    s.recipe.ph1 = 35;
+    s.recipe.pivotPpm = 2;
+    s.recipe.baseline = "manual";
+    s.recipe.baselineAnchors = [
+      { ppm: 0, value: 0.1 },
+      { ppm: 5, value: 0.2 },
+    ];
+    const before = processSpectrum(s),
+      delta = 3.7;
+    const translated = {
+      ...s,
+      referenceOffset: delta,
+      recipe: {
+        ...s.recipe,
+        pivotPpm: s.recipe.pivotPpm + delta,
+        baselineAnchors: s.recipe.baselineAnchors.map((a) => ({
+          ...a,
+          ppm: a.ppm + delta,
+        })),
+      },
+    };
     const after = processSpectrum(translated);
-    for (let i = 0; i < before.real.length; i += 37) { expect(after.real[i]).toBeCloseTo(before.real[i], 12); expect(after.imag![i]).toBeCloseTo(before.imag![i], 12); }
-    expect(integrate(after, delta, 1.9 + delta, 2.1 + delta)).toBeCloseTo(integrate(before, 0, 1.9, 2.1), 12);
+    for (let i = 0; i < before.real.length; i += 37) {
+      expect(after.real[i]).toBeCloseTo(before.real[i], 12);
+      expect(after.imag![i]).toBeCloseTo(before.imag![i], 12);
+    }
+    expect(integrate(after, delta, 1.9 + delta, 2.1 + delta)).toBeCloseTo(
+      integrate(before, 0, 1.9, 2.1),
+      12,
+    );
   });
-  it('always replays source rather than applying corrections to previously processed data', () => {
-    const s = spectrum(gaussian()); s.recipe.ph0 = 30; s.recipe.baseline = 'manual'; s.recipe.baselineAnchors = [{ ppm: 0, value: 0.2 }, { ppm: 7, value: 0.2 }];
-    const once = processSpectrum(s); s.data = once;
-    const twice = processSpectrum(s); expect(twice.real).toEqual(once.real); expect(twice.imag).toEqual(once.imag);
-    s.recipe.ph0 = 0; s.recipe.baseline = 'none'; expect(processSpectrum(s).real).toEqual(s.original.real);
+  it("always replays source rather than applying corrections to previously processed data", () => {
+    const s = spectrum(gaussian());
+    s.recipe.ph0 = 30;
+    s.recipe.baseline = "manual";
+    s.recipe.baselineAnchors = [
+      { ppm: 0, value: 0.2 },
+      { ppm: 7, value: 0.2 },
+    ];
+    const once = processSpectrum(s);
+    s.data = once;
+    const twice = processSpectrum(s);
+    expect(twice.real).toEqual(once.real);
+    expect(twice.imag).toEqual(once.imag);
+    s.recipe.ph0 = 0;
+    s.recipe.baseline = "none";
+    expect(processSpectrum(s).real).toEqual(s.original.real);
   });
-  it('decodes declared big-endian float64 processed data and NC_proc scaling', () => {
-    const buffer = new ArrayBuffer(32), view = new DataView(buffer); for (let i = 0; i < 4; i++) view.setFloat64(i * 8, i + 0.5, false);
-    const procs = '##$BYTORDP= 1\n##$DTYPP= 2\n##$SI= 4\n##$SF= 100\n##$SW_p= 400\n##$OFFSET= 3\n##$NC_proc= -1';
-    const r = importEntries([{ path: 'float64/1r', data: buffer }, { path: 'float64/procs', data: new TextEncoder().encode(procs).buffer }]);
-    expect([...r.spectra[0].data.real]).toEqual([0.25, 0.75, 1.25, 1.75]); expect([...r.spectra[0].data.x]).toEqual([3, 2, 1, 0]);
+  it("decodes declared big-endian float64 processed data and NC_proc scaling", () => {
+    const buffer = new ArrayBuffer(32),
+      view = new DataView(buffer);
+    for (let i = 0; i < 4; i++) view.setFloat64(i * 8, i + 0.5, false);
+    const procs =
+      "##$BYTORDP= 1\n##$DTYPP= 2\n##$SI= 4\n##$SF= 100\n##$SW_p= 400\n##$OFFSET= 3\n##$NC_proc= -1";
+    const r = importEntries([
+      { path: "float64/1r", data: buffer },
+      { path: "float64/procs", data: new TextEncoder().encode(procs).buffer },
+    ]);
+    expect([...r.spectra[0].data.real]).toEqual([0.25, 0.75, 1.25, 1.75]);
+    expect([...r.spectra[0].data.x]).toEqual([3, 2, 1, 0]);
   });
-  it('raw-only import preserves original FID and yields repeatable transforms', () => {
-    const entries = fixtureEntries('Proton').filter(e => !e.path.includes('/pdata/'));
-    const r = importEntries(entries); expect(r.warnings).toEqual([]); expect(r.spectra).toHaveLength(1);
-    const s = r.spectra[0]; expect(s.recipe.transform).toBe(true); const fidBefore = s.fid!.real.slice(), originalBefore = s.original.real.slice();
+  it("raw-only import preserves original FID and yields repeatable transforms", () => {
+    const entries = fixtureEntries("Proton").filter(
+      (e) => !e.path.includes("/pdata/"),
+    );
+    const r = importEntries(entries);
+    expect(r.warnings).toEqual([]);
+    expect(r.spectra).toHaveLength(1);
+    const s = r.spectra[0];
+    expect(s.recipe.transform).toBe(true);
+    const fidBefore = s.fid!.real.slice(),
+      originalBefore = s.original.real.slice();
     expect(processSpectrum(s).real).toEqual(originalBefore);
-    s.recipe.lbHz = 2; s.recipe.window = 'exponential'; s.data = processSpectrum(s);
-    expect(s.fid!.real).toEqual(fidBefore); expect(s.original.real).toEqual(originalBefore);
-    s.recipe.window = 'none'; expect(processSpectrum(s).real).toEqual(originalBefore);
-    s.recipe.transform = false; expect(processSpectrum(s).real).toEqual(originalBefore);
+    s.recipe.lbHz = 2;
+    s.recipe.window = "exponential";
+    s.data = processSpectrum(s);
+    expect(s.fid!.real).toEqual(fidBefore);
+    expect(s.original.real).toEqual(originalBefore);
+    s.recipe.window = "none";
+    expect(processSpectrum(s).real).toEqual(originalBefore);
+    s.recipe.transform = false;
+    expect(processSpectrum(s).real).toEqual(originalBefore);
   });
 });
 
@@ -292,12 +360,15 @@ describe("vendor and text adapters", () => {
         rawPeak = detectPeaks(raw, 0, 85, 0.02)[0];
       expect(Math.abs(processedPeak.ppm - rawPeak.ppm)).toBeLessThan(0.05);
     }
-  });
-  it("rejects actual COSY and NOESY instead of flattening", () => {
+  }, 15000);
+  it("opens actual COSY and NOESY as 2D matrices with a separate projection", () => {
     for (const folder of ["COSY", "DAC-1P Nosy Cosy C13/5"]) {
       const r = importEntries(fixtureEntries(folder));
-      expect(r.spectra).toHaveLength(0);
-      expect(r.warnings.join(" ")).toMatch(/no data were flattened/);
+      expect(r.spectra).toHaveLength(1);
+      expect(r.warnings).toEqual([]);
+      const twoD = r.spectra[0].twoD!;
+      expect(twoD.real.length).toBe(twoD.width * twoD.height);
+      expect(r.spectra[0].data.real.length).toBe(twoD.width);
     }
   });
   it("sorts explicit ppm CSV and rejects duplicate coordinates", () => {

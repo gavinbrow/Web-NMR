@@ -1,10 +1,11 @@
 import { zip, unzip, strToU8, strFromU8, type Zippable } from "fflate";
 import { get, set, del } from "idb-keyval";
-import type { ComplexData, Project, Spectrum } from "../model";
+import type { ComplexData, Project, Spectrum, TwoDSpectrum } from "../model";
 import { validProperties } from "./appearance";
 
 const MAX_BYTES = 256 * 1024 * 1024;
 const MAX_POINTS = 8_388_608;
+const MAX_MATRIX_POINTS = 10_000_000;
 const RECOVERY_KEY = "web-nmr-recovery-v1";
 type ArrayRef = { __array: "float64le"; path: string; length: number };
 function assert(condition: unknown, message: string): asserts condition {
@@ -47,6 +48,70 @@ function validateData(data: ComplexData) {
       Math.sign(data.x[i] - data.x[i - 1]) === direction,
       "Spectrum axis must be monotonic.",
     );
+}
+function validateTwoD(data: TwoDSpectrum): void {
+  assert(
+    data &&
+      Number.isInteger(data.width) &&
+      Number.isInteger(data.height) &&
+      data.width >= 2 &&
+      data.height >= 2 &&
+      data.width * data.height <= MAX_MATRIX_POINTS,
+    "Invalid 2D matrix dimensions.",
+  );
+  assert(
+    data.x instanceof Float64Array &&
+      data.y instanceof Float64Array &&
+      data.x.length === data.width &&
+      data.y.length === data.height,
+    "Invalid 2D axes.",
+  );
+  for (const axis of [data.x, data.y]) {
+    for (let i = 0; i < axis.length; i++)
+      assert(
+        finite(axis[i]) && (i === 0 || axis[i] < axis[i - 1]),
+        "2D axes must be finite and descend in ppm.",
+      );
+  }
+  const matrices = [data.real, data.imagF2, data.imagF1, data.imagBoth];
+  let total = 0;
+  for (const [index, matrix] of matrices.entries()) {
+    assert(
+      index > 0 || matrix instanceof Float64Array,
+      "2D real matrix is missing.",
+    );
+    if (matrix !== undefined) {
+      assert(
+        matrix instanceof Float64Array &&
+          matrix.length === data.width * data.height,
+        "Invalid 2D component dimensions.",
+      );
+      for (const v of matrix)
+        assert(finite(v), "2D matrix contains nonfinite values.");
+      total += matrix.byteLength;
+    }
+  }
+  assert(
+    total <= 160 * 1024 * 1024,
+    "2D components exceed the 160 MB matrix limit.",
+  );
+  assert(
+    text(data.nucleusF1) &&
+      finite(data.frequencyF1) &&
+      data.frequencyF1 > 0 &&
+      finite(data.referenceOffsetF1) &&
+      text(data.experiment) &&
+      ["Bruker processed 2D", "Bruker raw 2D magnitude"].includes(
+        data.source,
+      ) &&
+      ["absorption", "magnitude"].includes(data.mode),
+    "Invalid 2D acquisition metadata.",
+  );
+  assert(
+    data.acquisitionMode === undefined ||
+      ["States", "States-TPPI"].includes(data.acquisitionMode),
+    "Invalid raw 2D acquisition mode.",
+  );
 }
 
 /** Strictly validates persisted data before allowing it into the application. */
@@ -126,6 +191,7 @@ export function validateProject(value: unknown): asserts value is Project {
     );
     validateData(s.original);
     validateData(s.data);
+    if (s.twoD) validateTwoD(s.twoD);
     if (s.fid) {
       const f = s.fid;
       assert(
@@ -242,6 +308,20 @@ export function validateProject(value: unknown): asserts value is Project {
         ),
       "Invalid integrals.",
     );
+    if (s.integralCalibration !== undefined) {
+      const calibration = s.integralCalibration;
+      assert(
+        calibration &&
+          typeof calibration === "object" &&
+          !Array.isArray(calibration) &&
+          text(calibration.anchorId) &&
+          finite(calibration.target) &&
+          calibration.target > 0 &&
+          (calibration.tentative === undefined || typeof calibration.tentative === "boolean") &&
+          s.integrals.some(i => i.id === calibration.anchorId && i.area !== 0),
+        "Invalid integral calibration reference.",
+      );
+    }
     assert(
       list(s.multiplets) &&
         s.multiplets.every(
@@ -402,7 +482,7 @@ export async function decodeProject(bytes: Uint8Array): Promise<Project> {
             /^arrays\/\d+\.f64$/.test(ref.path) &&
             Number.isInteger(ref.length) &&
             ref.length >= 2 &&
-            ref.length <= MAX_POINTS,
+            ref.length <= MAX_MATRIX_POINTS,
           "Invalid binary array reference.",
         );
         const source = files[ref.path];

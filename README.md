@@ -14,6 +14,7 @@ Open the local URL printed by the development server. Build the static applicati
 
 ## Supported workflows
 
+- Import Bruker processed 2D NOESY/COSY planes (`2rr` and optional quadrants with `procs`/`proc2s`), rendered as signed contours with independent ppm axes, rectangle zoom, pan, threshold and figure/matrix export. Raw States/States-TPPI data can open as magnitude 2D spectra; other raw modes require processed planes.
 - Import Bruker 1D experiment folders or ZIP archives, including processed `1r`/`1i` and complex raw `fid` with parameters. Existing processed spectra are preferred.
 - Import two-column ppm/intensity CSV, TSV, or text, optionally with a third imaginary column. Enter an observed nucleus and MHz frequency in the inspector when absent.
 - Import and export basic uncompressed AFFN JCAMP-DX in ppm. Unsupported compression or multidimensional data are reported explicitly.
@@ -51,11 +52,11 @@ Core bindings were checked against [Mnova's official documentation](https://mest
 
 ## Validation and limits
 
-64 automated tests cover analytical DFT/FFT comparison, phase and baseline replay, reference invariance, signed endpoint integration, multiplet spacing, big-endian/float64 decoding, project precision, malformed projects, analytical exports, kinetic parameter recovery, and shortcut matching. When the supplied `../Example Files` are present, the tests also load the proton and million-point carbon datasets, compare raw/processed peak positions, and reject COSY/NOESY as unsupported 2D. The local browser was checked for actual Bruker ZIP import, recovery, analysis, individual gain, kinetic fitting, and phase preview/cancel.
+89 automated tests cover analytical DFT/FFT comparison, phase and baseline replay, reference invariance, signed endpoint integration, multiplet spacing, big-endian/float64 decoding, project precision, malformed projects, analytical exports, kinetic parameter recovery, and shortcut matching. When the supplied `../Example Files` are present, the tests also load the proton and million-point carbon datasets, compare raw/processed peak positions, and verify processed COSY/NOESY, raw-only States-TPPI orientation, matrix archive roundtrips, calibrated integrals and resolved split lines. The local browser was checked for actual Bruker ZIP import, recovery, analysis, individual gain, kinetic fitting, and phase preview/cancel.
 
 Automatic phase is a positive-absorption heuristic for routine positive 1D spectra. Automatic baseline methods include polynomial, Bernstein, Whittaker, splines, ablative shaving, arPLS and SNIP, plus clearly labelled independent joint phase/baseline adaptations for proprietary PcBc/apbk; broad or signed signals require manual review. Raw and vendor-processed amplitude scales are not assumed interchangeable for quantitative kinetics. Internal-standard kinetics reports area ratios corrected for proton count and optional concentrations from a known standard. Quantitative acquisition suitability must still be established. Numerical details are in [src/core/README.md](src/core/README.md).
 
-Native Varian/Agilent, JEOL, Mnova projects, compressed JCAMP, raw `ser` arrays, true 2D processing, structure assignment, freeform publication page layouts, and higher-order multiplet simulation are outside this initial build. Imports are limited to 256 MB; transforms to about four million points. Local recovery currently keeps one workspace per browser origin, so save portable projects when using several tabs.
+Native Varian/Agilent, JEOL, Mnova projects, compressed JCAMP, unsupported raw 2D acquisition modes, interactive 2D phase/baseline processing, 2D peak volumes, structure assignment, freeform publication page layouts, and higher-order multiplet simulation are outside this initial build. Imports are limited to 256 MB; transforms to about four million points. Local recovery currently keeps one workspace per browser origin, so save portable projects when using several tabs.
 
 ## Structure
 
@@ -75,4 +76,12 @@ A stack supports a shared integration region applied to every member, reference-
 
 Press **B** to preview a fitted blue baseline on the uncorrected, phased spectrum. Choose a method and parameters, optionally limit the region or exclude blind regions, then Apply or Cancel. Manual points support segments, splines, polynomial and Whittaker smoothing. Extract exports the fitted model. PcBc/apbk choices are independently implemented adaptations, not reproductions of proprietary vendor internals; regional masks disable their global phase adjustment. Algorithms estimate on a bounded grid then interpolate onto the original numerical axis; measurements remain full resolution.
 
-The Properties dialog covers implemented 1D NMR options. Mnova settings for unsupported 2D, prediction, assignments and fitting plugins are not emulated. Browser page geometry uses percentages and pixels rather than desktop print-layout units.
+The Properties dialog covers implemented 1D NMR options. Mnova settings for 2D analysis, prediction, assignments and fitting plugins are not emulated. Browser page geometry uses percentages and pixels rather than desktop print-layout units.
+
+## Spectrum-first analysis
+
+File title and comments are drawn inside the spectrum frame. **Show title** hides both. Tables and right panels stay closed by default; use Integral controls, Integral table, Shift+I or the toolbar toggle to open them. Tool modes use distinct cursors.
+
+Integral brackets and values sit below each trace. Uncalibrated values are relative to the first positive integral, with raw signed areas retained. Click to select an integral, drag its boundary handles, double-click to edit, or right-click for Edit Integral, Show Table of Integrals, Delete Integral, Delete All and tentative Autodetect Nuclides Count. A reference integral stores its ID and desired value; processing and boundary changes recalculate the factor while preserving that reference. Label-only edits retain the current calibration. Matching shared stack regions can be edited and normalized together. Auto normalize all resets member gain and normalizes display maxima without changing areas.
+
+Peak picking resolves individual split lines using noise-aware prominence. Auto multiplets suggests bounded groups with conservative first-order pattern/J estimates. These suggestions require review for overlap and second-order spectra. Numerical and display normalization are independent of kinetics measurements.

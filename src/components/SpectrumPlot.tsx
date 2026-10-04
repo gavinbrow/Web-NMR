@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import type { Spectrum, Tool, ComplexData } from "../model";
+import { displayedIntegralValue } from "../features/integrals";
 import type { SpectrumProperties } from "../features/appearance";
 
 interface Props {
@@ -26,6 +27,21 @@ interface Props {
   selected: string[];
   properties: SpectrumProperties;
   baseline: ComplexData | null;
+  selectedIntegral: string;
+  onIntegralSelect: (spectrumId: string, integralId: string) => void;
+  onIntegralEdit: (spectrumId: string, integralId: string) => void;
+  onIntegralResize: (
+    spectrumId: string,
+    integralId: string,
+    from: number,
+    to: number,
+  ) => void;
+  onIntegralMenu: (
+    spectrumId: string,
+    integralId: string,
+    x: number,
+    y: number,
+  ) => void;
   onFit: () => void;
   exportRef: React.RefObject<(() => string) | null>;
 }
@@ -118,9 +134,21 @@ export function SpectrumPlot(p: Props) {
       end: number;
       pan: boolean;
       shiftId?: string;
+      integral?: {
+        spectrumId: string;
+        integralId: string;
+        edge: "from" | "to";
+        from: number;
+        to: number;
+      };
     } | null>(null);
   const space = useRef(false);
-  const pad = { l: 64, r: 28, t: 70, b: 52 },
+  const pad = {
+      l: 54,
+      r: 22,
+      t: p.showPeaks && p.active.peaks.length ? 44 : 18,
+      b: 42,
+    },
     pw = Math.max(40, size.w - pad.l - pad.r),
     ph = Math.max(80, size.h - pad.t - pad.b);
   const isFid = p.component === "fid";
@@ -167,7 +195,9 @@ export function SpectrumPlot(p: Props) {
       ? [p.active]
       : p.mode === "single"
         ? [p.active]
-        : p.spectra.filter((s) => s.visible && s.nucleus === p.active.nucleus);
+        : p.spectra.filter(
+            (s) => s.visible && !s.twoD && s.nucleus === p.active.nucleus,
+          );
     const largest = Math.max(...all.map((s) => dataStats(s.data).max), 1e-20);
     const largestArea = Math.max(
       ...all.map((s) => dataStats(s.data).area),
@@ -194,7 +224,8 @@ export function SpectrumPlot(p: Props) {
         p.mode === "stack" && !isFid
           ? pad.t +
             ph -
-            (((i * a.stackSpacing) / 100 + 0.18) * ph) / Math.max(1, all.length)
+            48 -
+            (((i * a.stackSpacing) / 100) * (ph - 48)) / Math.max(1, all.length)
           : pad.t + ph * 0.88;
       let max = largest;
       if (isFid) {
@@ -402,16 +433,28 @@ export function SpectrumPlot(p: Props) {
             sum +=
               ((t.s.data.real[j] + t.s.data.real[j - 1]) * Math.abs(x - prev)) /
               2;
-            if (j % step === 0 || j === t.s.data.x.length - 1) {
+            const next = t.s.data.x[j + 1] + t.s.referenceOffset;
+            if (
+              !xs.length ||
+              j % step === 0 ||
+              j === t.s.data.x.length - 1 ||
+              next < lo ||
+              next > hi
+            ) {
               xs.push(x);
               sums.push(sum);
             }
           }
           const max = Math.max(Math.abs(sum), 1e-30),
             base =
-              p.mode === "stack"
-                ? t.base - 5
-                : pad.t + ph * (1 - a.integralPosition / 100),
+              t.base +
+              Math.max(
+                12,
+                Math.min(24, (ph / Math.max(1, traces.length)) * 0.12),
+              ) +
+              ((8 - a.integralPosition) * ph) /
+                100 /
+                Math.max(1, traces.length),
             height =
               (ph * a.integralHeight) /
               100 /
@@ -419,7 +462,7 @@ export function SpectrumPlot(p: Props) {
           const path = xs
             .map(
               (x, j) =>
-                `${j ? "L" : "M"}${xPixel(x) + t.horizontalOffset},${base - (sums[j] / max) * height}`,
+                `${j ? "L" : "M"}${xPixel(x) + t.horizontalOffset},${t.base - 6 - (sums[j] / max) * height}`,
             )
             .join("");
           return {
@@ -428,12 +471,54 @@ export function SpectrumPlot(p: Props) {
             base,
             path,
             curveY:
-              base - ((sums[Math.floor(sums.length / 2)] ?? 0) / max) * height,
+              t.base -
+              6 -
+              ((sums[Math.floor(sums.length / 2)] ?? 0) / max) * height,
           };
         }),
       ),
     [traces, a.integralPosition, a.integralHeight, p.mode, pw, ph, v[0], v[1]],
   );
+  const integralHit = (x: number, y: number) => {
+    if (!p.showIntegrals || !a.integrals || isFid) return undefined;
+    let best: (typeof integralMarks)[number] | undefined,
+      distance = Infinity;
+    for (const mark of integralMarks) {
+      const left =
+          Math.min(xPixel(mark.i.from), xPixel(mark.i.to)) +
+          mark.t.horizontalOffset,
+        right =
+          Math.max(xPixel(mark.i.from), xPixel(mark.i.to)) +
+          mark.t.horizontalOffset;
+      const mid = (left + right) / 2,
+        labelY = mark.base + Math.min(14, a.integralSize + 3);
+      if (
+        (x >= left - 7 && x <= right + 7 && Math.abs(y - mark.base) < 9) ||
+        (Math.abs(x - mid) <
+          (a.integralOrientation === "vertical"
+            ? 8
+            : Math.max(18, a.integralSize * 2.5)) &&
+          (a.integralOrientation === "vertical"
+            ? y >= mark.base + 3 &&
+              y <=
+                mark.base +
+                  8 +
+                  displayedIntegralValue(mark.t.s, mark.i).toFixed(
+                    a.integralDecimals,
+                  ).length *
+                    a.integralSize *
+                    0.65
+            : Math.abs(y - labelY) < 12))
+      ) {
+        const d = Math.abs(y - mark.base);
+        if (d < distance) {
+          distance = d;
+          best = mark;
+        }
+      }
+    }
+    return best;
+  };
   const nearestTrace = (x: number, y: number) => {
     let best = traces[0],
       distance = Infinity;
@@ -462,7 +547,7 @@ export function SpectrumPlot(p: Props) {
   const instruction = isFid
     ? "FID · real time signal"
     : {
-        select: "Select · click a spectrum to make it active",
+        select: "Select · click an integral to edit · right-click for options",
         zoom: "Zoom · drag across a region · Esc to cancel",
         pan: "Pan · drag to move the spectrum",
         reference: "Reference · click the signal to calibrate",
@@ -483,7 +568,23 @@ export function SpectrumPlot(p: Props) {
         if (isFid) return;
         p.onGain(e.deltaY < 0 ? 1.1 : 1 / 1.1);
       }}
-      onDoubleClick={p.onFit}
+      onContextMenu={(e) => {
+        const rect = host.current!.getBoundingClientRect(),
+          hit = integralHit(e.clientX - rect.left, e.clientY - rect.top);
+        if (hit) {
+          e.preventDefault();
+          e.stopPropagation();
+          p.onIntegralMenu(hit.t.s.id, hit.i.id, e.clientX, e.clientY);
+        }
+      }}
+      onDoubleClick={(e) => {
+        const rect = host.current!.getBoundingClientRect(),
+          hit = integralHit(e.clientX - rect.left, e.clientY - rect.top);
+        if (hit) {
+          e.stopPropagation();
+          p.onIntegralEdit(hit.t.s.id, hit.i.id);
+        } else p.onFit();
+      }}
       onPointerDown={(e) => {
         if (e.button !== 0) return;
         const x = pointerX(e);
@@ -491,6 +592,32 @@ export function SpectrumPlot(p: Props) {
         e.currentTarget.setPointerCapture(e.pointerId);
         const y = e.clientY - host.current!.getBoundingClientRect().top,
           hit = nearestTrace(x, y);
+        const integral = integralHit(x, y);
+        if (integral) {
+          p.onIntegralSelect(integral.t.s.id, integral.i.id);
+          const xf = xPixel(integral.i.from) + integral.t.horizontalOffset,
+            xt = xPixel(integral.i.to) + integral.t.horizontalOffset;
+          const edge =
+            Math.abs(x - xf) < 7
+              ? "from"
+              : Math.abs(x - xt) < 7
+                ? "to"
+                : undefined;
+          if (edge)
+            setDrag({
+              start: x,
+              end: x,
+              pan: false,
+              integral: {
+                spectrumId: integral.t.s.id,
+                integralId: integral.i.id,
+                edge,
+                from: integral.i.from,
+                to: integral.i.to,
+              },
+            });
+          return;
+        }
         if (y < pad.t || y > pad.t + ph) {
           p.onDeselect();
           return;
@@ -521,9 +648,20 @@ export function SpectrumPlot(p: Props) {
       onPointerLeave={() => setCursor(null)}
       onPointerUp={(e) => {
         if (!drag) return;
-        const { start, end, pan, shiftId } = drag;
+        const { start, end, pan, shiftId, integral } = drag;
         setDrag(null);
         if (isFid) return;
+        if (integral) {
+          const t = traces.find((t) => t.s.id === integral.spectrumId);
+          const ppm = ppmAt(end - (t?.horizontalOffset ?? 0));
+          p.onIntegralResize(
+            integral.spectrumId,
+            integral.integralId,
+            integral.edge === "from" ? ppm : integral.from,
+            integral.edge === "to" ? ppm : integral.to,
+          );
+          return;
+        }
         if (shiftId && Math.abs(end - start) > 3) {
           p.onShift(shiftId, ppmAt(end) - ppmAt(start));
           return;
@@ -533,8 +671,8 @@ export function SpectrumPlot(p: Props) {
           p.onZoom([v[0] + delta, v[1] + delta]);
           return;
         }
-        const a = ppmAt(start),
-          b = ppmAt(end);
+        const a = ppmAt(start - (activeTrace?.horizontalOffset ?? 0)),
+          b = ppmAt(end - (activeTrace?.horizontalOffset ?? 0));
         if (Math.abs(end - start) > 5) {
           if (p.tool === "zoom" || p.tool === "select")
             p.onZoom([Math.max(a, b), Math.min(a, b)]);
@@ -598,37 +736,58 @@ export function SpectrumPlot(p: Props) {
           </g>
         )}
         {a.title && (
-          <text
-            x={
-              (a.titleAlignment === "left"
-                ? pad.l
-                : a.titleAlignment === "center"
-                  ? size.w / 2
-                  : pad.l + pw) + a.titleX
-            }
-            y={(a.titlePosition === "outside" ? 18 : 27) + a.titleY}
-            textAnchor={
-              a.titleAlignment === "left"
-                ? "start"
-                : a.titleAlignment === "center"
-                  ? "middle"
-                  : "end"
-            }
-            fontSize={a.titleSize}
-            fill={a.titleColor}
-            fontFamily={a.titleFont}
-          >
-            {a.titleText || p.active.label}
-          </text>
+          <g data-testid="spectrum-title" pointerEvents="none">
+            <text
+              x={
+                (a.titleAlignment === "left"
+                  ? pad.l + 4
+                  : a.titleAlignment === "center"
+                    ? pad.l + pw / 2
+                    : pad.l + pw - 4) + a.titleX
+              }
+              y={pad.t + a.titleSize + 2 + a.titleY}
+              textAnchor={
+                a.titleAlignment === "left"
+                  ? "start"
+                  : a.titleAlignment === "center"
+                    ? "middle"
+                    : "end"
+              }
+              fontSize={a.titleSize}
+              fill={a.titleColor}
+              fontFamily={a.titleFont}
+            >
+              <tspan>
+                {a.titleText ||
+                  String(p.active.metadata.title || p.active.label)}
+              </tspan>
+              {String(
+                p.active.metadata.comments ||
+                  p.active.metadata.COMMENT ||
+                  p.active.metadata.COMMENTS ||
+                  "",
+              )
+                .split(/\r?\n/)
+                .filter(Boolean)
+                .map((line, index) => (
+                  <tspan
+                    key={index}
+                    x={
+                      (a.titleAlignment === "left"
+                        ? pad.l + 4
+                        : a.titleAlignment === "center"
+                          ? pad.l + pw / 2
+                          : pad.l + pw - 4) + a.titleX
+                    }
+                    dy={a.titleSize + 2}
+                    fontSize={Math.max(9, a.titleSize - 2)}
+                  >
+                    {line}
+                  </tspan>
+                ))}
+            </text>
+          </g>
         )}
-        <text x={pad.l} y={46} className="plot-subtitle">
-          {p.active.nucleus} · {p.active.frequencyMHz.toFixed(2)} MHz ·{" "}
-          {isFid
-            ? "FID"
-            : p.mode === "single"
-              ? "1D spectrum"
-              : `${traces.length} spectra · ${p.mode}`}{" "}
-        </text>
         <g clipPath="url(#plot-clip)">
           {p.showIntegrals &&
             a.integrals &&
@@ -637,10 +796,23 @@ export function SpectrumPlot(p: Props) {
               const offset = t.horizontalOffset,
                 labelX = xPixel((i.from + i.to) / 2) + offset,
                 labelY =
-                  (a.integralLabelPosition === "curve" ? curveY : base) -
-                  (ph * a.integralMargin) / 100;
+                  a.integralOrientation === "vertical"
+                    ? base + 5
+                    : base + Math.min(14, a.integralSize + 3),
+                selected =
+                  p.active.id === t.s.id && p.selectedIntegral === i.id;
+              void curveY;
               return (
-                <g key={t.s.id + i.id}>
+                <g
+                  key={t.s.id + i.id}
+                  data-testid="integral-mark"
+                  data-integral-id={i.id}
+                  data-spectrum-id={t.s.id}
+                  data-from={i.from}
+                  data-to={i.to}
+                  data-value={displayedIntegralValue(t.s, i)}
+                  data-baseline={t.base}
+                >
                   {a.integralBaseline && (
                     <line
                       x1={xPixel(i.from) + offset}
@@ -653,10 +825,22 @@ export function SpectrumPlot(p: Props) {
                   )}
                   <path
                     d={`M${xPixel(i.from) + offset},${base - 4}v4H${xPixel(i.to) + offset}v-4`}
-                    stroke={a.integralColor}
-                    strokeWidth={a.integralWidth}
+                    stroke={selected ? "#c13249" : a.integralColor}
+                    strokeWidth={selected ? 2 : a.integralWidth}
                     fill="none"
                   />
+                  {selected &&
+                    [i.from, i.to].map((ppm, index) => (
+                      <rect
+                        key={index}
+                        data-ui="true"
+                        x={xPixel(ppm) + offset - 3}
+                        y={base - 4}
+                        width="6"
+                        height="7"
+                        fill="#c13249"
+                      />
+                    ))}
                   {a.integralCurves && (
                     <path
                       d={path}
@@ -669,17 +853,23 @@ export function SpectrumPlot(p: Props) {
                     <text
                       x={labelX}
                       y={labelY}
-                      textAnchor="middle"
+                      textAnchor={
+                        a.integralOrientation === "vertical"
+                          ? "start"
+                          : "middle"
+                      }
                       fontSize={a.integralSize}
                       fontFamily={a.integralFont}
                       fill={a.integralColor}
                       transform={
                         a.integralOrientation === "vertical"
-                          ? `rotate(-90,${labelX},${labelY})`
+                          ? `rotate(90,${labelX},${labelY})`
                           : undefined
                       }
                     >
-                      {(i.area * t.s.integralScale).toFixed(a.integralDecimals)}
+                      {displayedIntegralValue(t.s, i).toFixed(
+                        a.integralDecimals,
+                      )}
                       {a.integralMethodSymbol ? " S" : ""}
                     </text>
                   )}
@@ -710,7 +900,10 @@ export function SpectrumPlot(p: Props) {
           {!isFid &&
             a.multipletLabels &&
             p.active.multiplets.map((a) => (
-              <g key={a.id}>
+              <g
+                key={a.id}
+                transform={`translate(${activeTrace?.horizontalOffset ?? 0},0)`}
+              >
                 {p.properties.multipletBox && (
                   <rect
                     x={Math.min(xPixel(a.from), xPixel(a.to))}
@@ -773,6 +966,7 @@ export function SpectrumPlot(p: Props) {
             p.active.recipe.baselineAnchors.map((a, i) => (
               <circle
                 key={i}
+                transform={`translate(${activeTrace?.horizontalOffset ?? 0},0)`}
                 cx={xPixel(a.ppm)}
                 cy={
                   activeTrace
@@ -802,7 +996,10 @@ export function SpectrumPlot(p: Props) {
         {p.showPeaks &&
           !isFid &&
           visiblePeakLabels.map((a) => (
-            <g key={a.id}>
+            <g
+              key={a.id}
+              transform={`translate(${activeTrace?.horizontalOffset ?? 0},0)`}
+            >
               {p.properties.peakTicks && (
                 <line
                   x1={xPixel(a.ppm)}
@@ -1007,7 +1204,7 @@ export function SpectrumPlot(p: Props) {
             className="crosshair"
           />
         )}
-        {drag && !drag.pan && !drag.shiftId && (
+        {drag && !drag.pan && !drag.shiftId && !drag.integral && (
           <rect
             data-ui="true"
             x={Math.min(drag.start, drag.end)}

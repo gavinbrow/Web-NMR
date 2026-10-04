@@ -1035,10 +1035,16 @@ export function detectPeaks(
   minDistancePpm: number,
   negative = false,
 ): Peak[] {
+  if (data.x.length !== data.real.length || data.real.length < 3) return [];
+  if (![offset, thresholdPercent, minDistancePpm].every(Number.isFinite)) throw new Error("Peak picking settings must be finite.");
   let max = 0;
   for (const y of data.real) max = Math.max(max, negative ? Math.abs(y) : y);
-  const threshold = (max * Math.max(0, thresholdPercent)) / 100,
-    candidates: { index: number; magnitude: number }[] = [];
+  if (!(max > 0)) return [];
+  const differences: number[] = [], stride = Math.max(1, Math.floor(data.real.length / 8192));
+  for (let i = 1; i < data.real.length; i += stride) differences.push(Math.abs(data.real[i] - data.real[i - 1]));
+  const noise = data.real.length >= 32 ? median(differences) / 0.9538725524 : 0;
+  const threshold = Math.max((max * Math.max(0, thresholdPercent)) / 100, noise * 4),
+    candidates: { index: number; magnitude: number; sign: number }[] = [];
   for (let i = 1; i < data.real.length - 1; i++) {
     const y = data.real[i],
       sign = y < 0 ? -1 : 1,
@@ -1049,11 +1055,49 @@ export function detectPeaks(
       a > data.real[i - 1] * sign &&
       a >= data.real[i + 1] * sign
     )
-      candidates.push({ index: i, magnitude: a });
+      candidates.push({ index: i, magnitude: a, sign });
   }
-  candidates.sort((a, b) => b.magnitude - a.magnitude);
+  // Adjacent peak intervals partition the array: valley/prominence checks are O(N).
+  const valleys: { min: number; max: number }[] = [];
+  let start = 0;
+  for (const end of [...candidates.map(c => c.index), data.real.length - 1]) {
+    let lo = Infinity, hi = -Infinity;
+    for (let i = start; i <= end; i++) { lo = Math.min(lo, data.real[i]); hi = Math.max(hi, data.real[i]); }
+    valleys.push({ min: lo, max: hi }); start = end;
+  }
+  // Topographic prominence searches up to a taller peak, so tiny noisy maxima
+  // on a broad signal cannot hide that signal's actual highest line.
+  const higherLeft = new Int32Array(candidates.length).fill(-1), higherRight = new Int32Array(candidates.length).fill(candidates.length);
+  const positiveStack: number[] = [], negativeStack: number[] = [];
+  for (let i = 0; i < candidates.length; i++) {
+    const stack = candidates[i].sign > 0 ? positiveStack : negativeStack;
+    while (stack.length && candidates[stack.at(-1)!].magnitude <= candidates[i].magnitude) stack.pop();
+    if (stack.length) higherLeft[i] = stack.at(-1)!; stack.push(i);
+  }
+  positiveStack.length = 0; negativeStack.length = 0;
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    const stack = candidates[i].sign > 0 ? positiveStack : negativeStack;
+    while (stack.length && candidates[stack.at(-1)!].magnitude <= candidates[i].magnitude) stack.pop();
+    if (stack.length) higherRight[i] = stack.at(-1)!; stack.push(i);
+  }
+  const treeSize = nextPowerOfTwo(valleys.length), minTree = new Float64Array(treeSize * 2).fill(Infinity), maxTree = new Float64Array(treeSize * 2).fill(-Infinity);
+  valleys.forEach((v, i) => { minTree[treeSize + i] = v.min; maxTree[treeSize + i] = v.max; });
+  for (let i = treeSize - 1; i > 0; i--) { minTree[i] = Math.min(minTree[i * 2], minTree[i * 2 + 1]); maxTree[i] = Math.max(maxTree[i * 2], maxTree[i * 2 + 1]); }
+  function valleyMinimum(left: number, right: number, sign: number): number {
+    left += treeSize; right += treeSize;
+    let result = Infinity;
+    while (left <= right) {
+      if (left & 1) { result = Math.min(result, sign > 0 ? minTree[left] : -maxTree[left]); left++; }
+      if (!(right & 1)) { result = Math.min(result, sign > 0 ? minTree[right] : -maxTree[right]); right--; }
+      left >>= 1; right >>= 1;
+    }
+    return result;
+  }
+  const resolved = candidates.filter((c, i) => c.magnitude - Math.max(valleyMinimum(higherLeft[i] + 1, i, c.sign), valleyMinimum(i + 1, higherRight[i], c.sign)) >= Math.max(noise * 3.5, max * 1e-12));
+  resolved.sort((a, b) => b.magnitude - a.magnitude);
   const selected: Peak[] = [];
-  for (const { index: i } of candidates) {
+  const distance = Math.max(0, minDistancePpm), buckets = new Map<number, number[]>();
+  for (const { index: i } of resolved) {
     const a = data.real[i - 1],
       b = data.real[i],
       c = data.real[i + 1],
@@ -1062,8 +1106,12 @@ export function detectPeaks(
       ? Math.max(-0.5, Math.min(0.5, (0.5 * (a - c)) / denominator))
       : 0;
     const ppm = data.x[i] + delta * (data.x[i + 1] - data.x[i]) + offset;
-    if (selected.every((p) => Math.abs(p.ppm - ppm) >= minDistancePpm))
+    const bucket = distance > 0 ? Math.floor(ppm / distance) : 0;
+    const tooClose = distance > 0 && [bucket - 1, bucket, bucket + 1].some(k => (buckets.get(k) ?? []).some(position => Math.abs(position - ppm) < distance));
+    if (!tooClose) {
       selected.push({ id: uid(), ppm, height: b - 0.25 * (a - c) * delta });
+      if (distance > 0) buckets.set(bucket, [...(buckets.get(bucket) ?? []), ppm]);
+    }
     if (selected.length >= 5000) break;
   }
   return selected.sort((a, b) => b.ppm - a.ppm);
@@ -1093,6 +1141,19 @@ export function integrate(
   return area;
 }
 
+function analysisRegionIndices(data: ComplexData, offset: number, low: number, high: number): [number, number] {
+  const ascending = data.x[0] < data.x[data.x.length - 1];
+  const a = ascending ? low - offset : -(high - offset), b = ascending ? high - offset : -(low - offset);
+  function bound(value: number, upper: boolean) {
+    let left = 0, right = data.x.length;
+    while (left < right) {
+      const middle = (left + right) >>> 1, x = ascending ? data.x[middle] : -data.x[middle];
+      if (x < value || (upper && x === value)) left = middle + 1; else right = middle;
+    }
+    return left;
+  }
+  return [bound(a, false), bound(b, true)];
+}
 export function analyzeMultiplet(
   data: ComplexData,
   offset: number,
@@ -1100,18 +1161,15 @@ export function analyzeMultiplet(
   to: number,
   frequencyMHz: number,
 ): Multiplet {
-  const lo = Math.min(from, to),
-    hi = Math.max(from, to),
-    indices: number[] = [];
-  for (let i = 0; i < data.x.length; i++)
-    if (data.x[i] + offset >= lo && data.x[i] + offset <= hi) indices.push(i);
+  const lo = Math.min(from, to), hi = Math.max(from, to);
+  if (![lo, hi, offset, frequencyMHz].every(Number.isFinite) || lo === hi) throw new Error("Choose finite multiplet region limits.");
+  const [start, end] = analysisRegionIndices(data, offset, lo, hi);
   const region: ComplexData = {
-    x: Float64Array.from(indices.map((i) => data.x[i])),
-    real: Float64Array.from(indices.map((i) => data.real[i])),
+    x: data.x.slice(start, end), real: data.real.slice(start, end),
   };
   const spacing =
     region.x.length > 1 ? Math.abs(region.x[1] - region.x[0]) * 2 : 0.001;
-  const peaks = detectPeaks(region, offset, 12, spacing),
+  const peaks = detectPeaks(region, offset, 4, spacing),
     count = peaks.length;
   const gaps = peaks
     .slice(1)
@@ -1126,6 +1184,9 @@ export function analyzeMultiplet(
     2: [1, 1],
     3: [1, 2, 1],
     4: [1, 3, 3, 1],
+    5: [1, 4, 6, 4, 1],
+    6: [1, 5, 10, 10, 5, 1],
+    7: [1, 6, 15, 20, 15, 6, 1],
   };
   const expected = patterns[count],
     maximum = Math.max(...peaks.map((p) => p.height), 0);
@@ -1140,7 +1201,7 @@ export function analyzeMultiplet(
     count === 1
       ? "s"
       : equalSpacing && equalPattern
-        ? ({ 2: "d", 3: "t", 4: "q" } as Record<number, string>)[count]
+        ? ({ 2: "d", 3: "t", 4: "q", 5: "quint", 6: "sext", 7: "sept" } as Record<number, string>)[count]
         : "m";
   const center = peaks.length
     ? peaks.reduce((sum, p) => sum + p.ppm * p.height, 0) /
@@ -1148,12 +1209,48 @@ export function analyzeMultiplet(
     : (from + to) / 2;
   return {
     id: uid(),
-    from,
-    to,
+    from: hi,
+    to: lo,
     center,
     kind,
     couplingsHz: kind !== "m" && meanGap && frequencyMHz > 0 ? [meanGap] : [],
     peakCount: count,
     label: "",
   };
+}
+
+/** Automatic candidate regions; simple first-order labels remain tentative estimates. */
+export function autoMultiplets(s: Spectrum, from?: number, to?: number): Multiplet[] {
+  if (s.data.x.length < 3) return [];
+  const bounds = [Math.max(s.data.x[0], s.data.x[s.data.x.length - 1]) + s.referenceOffset, Math.min(s.data.x[0], s.data.x[s.data.x.length - 1]) + s.referenceOffset];
+  const low = Math.min(from ?? bounds[0], to ?? bounds[1]), high = Math.max(from ?? bounds[0], to ?? bounds[1]);
+  if (!Number.isFinite(low) || !Number.isFinite(high) || low >= high) throw new Error("Choose a valid multiplet analysis region.");
+  const [start, end] = analysisRegionIndices(s.data, s.referenceOffset, low, high);
+  const region = { x: s.data.x.slice(start, end), real: s.data.real.slice(start, end) };
+  const peaks = detectPeaks(region, s.referenceOffset, 0.5, 0).sort((a, b) => a.ppm - b.ppm);
+  if (!peaks.length) return [];
+  const step = Math.abs(s.data.x[1] - s.data.x[0]), maxGap = s.frequencyMHz > 0 ? 20 / s.frequencyMHz : 0.05;
+  const groups: Peak[][] = [];
+  for (const peak of peaks) {
+    const last = groups.at(-1), previous = last?.at(-1);
+    if (last && previous && peak.ppm - previous.ppm <= maxGap) {
+      const gap = peak.ppm - previous.ppm;
+      const [a, b] = analysisRegionIndices(s.data, s.referenceOffset, previous.ppm, peak.ppm);
+      let valley = Infinity;
+      for (let i = a; i < b; i++) valley = Math.min(valley, s.data.real[i]);
+      // Deep baseline separation plus large spacing splits independent signals;
+      // tightly spaced resolved lines form one tentative multiplet candidate.
+      const boundary = valley < Math.min(previous.height, peak.height) * 0.02 && gap > (s.frequencyMHz > 0 ? 12 / s.frequencyMHz : 0.03);
+      if (!boundary) { last.push(peak); continue; }
+    }
+    groups.push([peak]);
+  }
+  return groups.slice(0, 1000).map((group, index) => {
+    const first = group[0].ppm, last = group.at(-1)!.ppm;
+    const adjacentLow = groups[index - 1]?.at(-1)?.ppm ?? low, adjacentHigh = groups[index + 1]?.[0]?.ppm ?? high;
+    const padding = Math.max(step * 4, Math.min(0.04, s.frequencyMHz > 0 ? 4 / s.frequencyMHz : 0.01));
+    const left = Math.max(low, first - padding, (adjacentLow + first) / 2), right = Math.min(high, last + padding, (last + adjacentHigh) / 2);
+    const result = analyzeMultiplet(s.data, s.referenceOffset, right, left, s.frequencyMHz);
+    return { ...result, label: String.fromCharCode(65 + index % 26) + (index >= 26 ? String(Math.floor(index / 26) + 1) : "") };
+  });
 }

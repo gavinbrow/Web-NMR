@@ -152,7 +152,7 @@ export const defaultProperties = (): SpectrumProperties => ({
   integralPosition: 8,
   integralHeight: 15,
   integralLabelPosition: "segment",
-  integralOrientation: "horizontal",
+  integralOrientation: "vertical",
   integralMethodSymbol: false,
   multipletLabels: true,
   multipletShiftDecimals: 3,

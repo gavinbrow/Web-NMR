@@ -114,6 +114,24 @@ describe("portable project", () => {
     p.spectra[0].data.x[2] = 5;
     await expect(encodeProject(p)).rejects.toThrow("monotonic");
   });
+  it("preserves integral calibration and refuses corrupt or missing references", async () => {
+    const p = project();
+    p.spectra[0].integralCalibration = { anchorId: "i", target: 3, tentative: true };
+    const result = await decodeProject(await encodeProject(p));
+    expect(result.spectra[0].integralCalibration).toEqual(p.spectra[0].integralCalibration);
+    const files = unzipSync(await encodeProject(p));
+    const manifest = JSON.parse(strFromU8(files["manifest.json"]));
+    for (const calibration of [
+      { anchorId: "missing", target: 3 },
+      { anchorId: "i", target: "3" },
+      { anchorId: "i", target: 0 },
+      { anchorId: "i", target: 3, tentative: "yes" },
+    ]) {
+      manifest.spectra[0].integralCalibration = calibration;
+      files["manifest.json"] = strToU8(JSON.stringify(manifest));
+      await expect(decodeProject(zipSync(files))).rejects.toThrow("calibration");
+    }
+  });
   it("saves unknown spectrometer frequency without inventing JCAMP acquisition metadata", async () => {
     const source = project();
     source.spectra[0].frequencyMHz = 0;

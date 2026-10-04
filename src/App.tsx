@@ -57,7 +57,12 @@ import {
   autoPhaseAsync,
   processBaselineAsync,
 } from "./core/workerClient";
-import { detectPeaks, integrate, analyzeMultiplet } from "./core/numerics";
+import {
+  detectPeaks,
+  integrate,
+  analyzeMultiplet,
+  autoMultiplets,
+} from "./core/numerics";
 import { createDemoSpectra } from "./features/demo";
 import { droppedFiles } from "./features/dropFiles";
 import {
@@ -92,6 +97,15 @@ import { PropertiesDialog } from "./components/PropertiesDialog";
 import { BaselineDialog } from "./components/BaselineDialog";
 import type { SpectrumStack } from "./model";
 import { SpectrumPlot, dataStats } from "./components/SpectrumPlot";
+import {
+  displayedIntegralValue,
+  normalizeIntegral as calibrateIntegral,
+  recalibrateIntegrals,
+  autodetectIntegralCounts,
+} from "./features/integrals";
+import { IntegralDialog } from "./components/IntegralDialog";
+import { visibleGrid, contourPath } from "./features/contours";
+import { TwoDPlot } from "./components/TwoDPlot";
 import { KineticsChart } from "./components/KineticsChart";
 
 type WorkspaceSnapshot = {
@@ -220,6 +234,26 @@ function NumberField({
     </Field>
   );
 }
+function MiniTwoD({ spectrum: s }: { spectrum: Spectrum }) {
+  const paths = useMemo(() => {
+    const m = s.twoD!,
+      g = visibleGrid(m, [m.x[0], m.x.at(-1)!], [m.y[0], m.y.at(-1)!], 65);
+    let max = 0;
+    for (const value of m.real) max = Math.max(max, Math.abs(value));
+    const xp = (x: number) => 2 + ((m.x[0] - x) / (m.x[0] - m.x.at(-1)!)) * 146,
+      yp = (y: number) => 2 + ((m.y[0] - y) / (m.y[0] - m.y.at(-1)!)) * 44;
+    return [
+      contourPath(g, max * 0.025, xp, yp),
+      contourPath(g, -max * 0.025, xp, yp),
+    ];
+  }, [s.twoD]);
+  return (
+    <svg viewBox="0 0 150 48" aria-hidden="true">
+      <path d={paths[0]} stroke={s.color} fill="none" strokeWidth=".5" />
+      <path d={paths[1]} stroke="#287cb2" fill="none" strokeWidth=".5" />
+    </svg>
+  );
+}
 function MiniTrace({ spectrum: s }: { spectrum: Spectrum }) {
   const path = useMemo(() => {
     let d = "";
@@ -261,9 +295,16 @@ export default function App() {
     [selectedStackId, setSelectedStackId] = useState<string | null>(null);
   const [properties, setProperties] = useState(defaultProperties),
     [propertiesOpen, setPropertiesOpen] = useState(false),
-    [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(
-      null,
-    );
+    [contextMenu, setContextMenu] = useState<{
+      x: number;
+      y: number;
+      integralId?: string;
+      spectrumId?: string;
+    } | null>(null);
+  const [integralEdit, setIntegralEdit] = useState<{
+    spectrumId: string;
+    integralId: string;
+  } | null>(null);
   const [baselineOpen, setBaselineOpen] = useState(false),
     [baselineSource, setBaselineSource] = useState<Spectrum["data"] | null>(
       null,
@@ -311,7 +352,7 @@ export default function App() {
   const [table, setTable] = useState<Table>("Integrals"),
     [tableOpen, setTableOpen] = useState(false),
     [navigatorOpen, setNavigatorOpen] = useState(() => window.innerWidth > 620),
-    [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth > 620),
+    [inspectorOpen, setInspectorOpen] = useState(false),
     [filter, setFilter] = useState("");
   const [toast, setToast] = useState(""),
     [busy, setBusy] = useState(""),
@@ -323,7 +364,7 @@ export default function App() {
     [preview, setPreview] = useState<Spectrum["data"] | null>(null),
     [scope, setScope] = useState<"active" | "selected" | "all">("active");
   const [threshold, setThreshold] = useState(3),
-    [minDistance, setMinDistance] = useState(0.012),
+    [minDistance, setMinDistance] = useState(0),
     [negative, setNegative] = useState(false),
     [clickedPpm, setClickedPpm] = useState(0),
     [targetPpm, setTargetPpm] = useState(0);
@@ -349,6 +390,7 @@ export default function App() {
     folderInput = useRef<HTMLInputElement>(null),
     projectInput = useRef<HTMLInputElement>(null),
     svgExport = useRef<(() => string) | null>(null),
+    twoDFull = useRef<(() => void) | null>(null),
     job = useRef(0),
     navigatorList = useRef<HTMLDivElement>(null);
   const active = spectra.find((s) => s.id === activeId) ?? spectra[0];
@@ -452,7 +494,11 @@ export default function App() {
       });
       setPreview(null);
       setScope("active");
-      setSelectedIntegral(active.integrals[0]?.id ?? "");
+      setSelectedIntegral((id) =>
+        active.integrals.some((i) => i.id === id)
+          ? id
+          : (active.integrals[0]?.id ?? ""),
+      );
     }
     setComponent("real");
   }, [activeId, active?.revision]);
@@ -514,6 +560,10 @@ export default function App() {
     setView(v);
   }
   function full() {
+    if (active?.twoD) {
+      twoDFull.current?.();
+      return;
+    }
     if (active) {
       zoom(extent(active.data, active.referenceOffset));
       setPlotGain(1);
@@ -563,7 +613,11 @@ export default function App() {
       selectionAnchor.current = id;
     }
     const next = spectra.find((s) => s.id === id);
-    if (next && active && next.nucleus !== active.nucleus) {
+    if (
+      next &&
+      active &&
+      (next.nucleus !== active.nucleus || !!next.twoD !== !!active.twoD)
+    ) {
       setView(extent(next.data, next.referenceOffset));
       setPlotGain(1);
     }
@@ -572,10 +626,13 @@ export default function App() {
   }
   function toolMode(t: Tool, p?: Panel) {
     if (busy) return;
+    if (active?.twoD && !["select", "zoom", "pan"].includes(t)) {
+      notify("Choose a 1D spectrum for this analysis tool.");
+      return;
+    }
     setTool(t);
     if (p) {
       setPanel(p);
-      setInspectorOpen(true);
     }
     if (t === "integral") setTable("Integrals");
     if (t === "multiplet") setTable("Multiplets");
@@ -620,7 +677,7 @@ export default function App() {
       setWarnings(result.warnings);
       if (!result.spectra.length) {
         notify(
-          "No supported 1D spectra found. Open the experiment folder or a ZIP.",
+          "No supported spectra found. Open the experiment folder or a ZIP.",
         );
         return;
       }
@@ -662,7 +719,7 @@ export default function App() {
     }
   }
   async function process(kind: "preview" | "apply", recipe = draft) {
-    if (!active || busy) return;
+    if (!active || busy || active.twoD) return;
     const targets =
       kind === "preview"
         ? [active]
@@ -685,7 +742,7 @@ export default function App() {
     );
     try {
       const results: Map<string, Spectrum> = new Map();
-      for (const s of targets) {
+      for (const s of targets.filter((s) => !s.twoD)) {
         const updated = {
           ...s,
           recipe: { ...recipe, baselineAnchors: [...recipe.baselineAnchors] },
@@ -698,21 +755,26 @@ export default function App() {
           setPreview(data);
           notify("Preview ready. Apply to keep these changes.");
         } else {
-          results.set(s.id, {
-            ...updated,
-            data,
-            peaks: [],
-            multiplets: [],
-            integrals: s.integrals.map((i) => ({
-              ...i,
-              area: integrate(data, s.referenceOffset, i.from, i.to),
-            })),
-            history: [
-              ...s.history,
-              `${new Date().toLocaleTimeString()} · Processing: ${recipe.transform ? "FT · " : ""}phase ${recipe.ph0.toFixed(1)}°/${recipe.ph1.toFixed(1)}° · baseline ${recipe.baseline}${recipe.baseline !== "none" ? " / " + (recipe.baseline === "manual" ? recipe.manualBaselineMethod : recipe.baselineMethod) : ""}${processed.effectivePhase ? ` · joint phase ${processed.effectivePhase.ph0.toFixed(1)}°/${processed.effectivePhase.ph1.toFixed(1)}°` : ""}`,
-            ],
-            revision: s.revision + 1,
-          });
+          results.set(
+            s.id,
+            recalibrateIntegrals(
+              {
+                ...updated,
+                data,
+                peaks: [],
+                multiplets: [],
+                history: [
+                  ...s.history,
+                  `${new Date().toLocaleTimeString()} · Processing: ${recipe.transform ? "FT · " : ""}phase ${recipe.ph0.toFixed(1)}°/${recipe.ph1.toFixed(1)}° · baseline ${recipe.baseline}${recipe.baseline !== "none" ? " / " + (recipe.baseline === "manual" ? recipe.manualBaselineMethod : recipe.baselineMethod) : ""}${processed.effectivePhase ? ` · joint phase ${processed.effectivePhase.ph0.toFixed(1)}°/${processed.effectivePhase.ph1.toFixed(1)}°` : ""}`,
+                ],
+                revision: s.revision + 1,
+              },
+              s.integrals.map((i) => ({
+                ...i,
+                area: integrate(data, s.referenceOffset, i.from, i.to),
+              })),
+            ),
+          );
         }
       }
       if (kind === "apply") {
@@ -753,7 +815,7 @@ export default function App() {
     notify("Preview canceled");
   }
   async function autoPhase() {
-    if (!active || busy) return;
+    if (!active || busy || active.twoD) return;
     setPanel("phase");
     setInspectorOpen(true);
     setBusy("Finding phase correction…");
@@ -776,7 +838,7 @@ export default function App() {
     }
   }
   function openBaseline(manual = false) {
-    if (!active || busy) return;
+    if (!active || busy || active.twoD) return;
     setTab("Processing");
     setPanel("baseline");
     setComponent("real");
@@ -826,7 +888,7 @@ export default function App() {
     };
   }, [baselineOpen, draft, active]);
   function autoPeaks(from?: number, to?: number) {
-    if (!active || busy) return;
+    if (!active || busy || active.twoD) return;
     const picked = detectPeaks(
       active.data,
       active.referenceOffset,
@@ -855,12 +917,11 @@ export default function App() {
       history: [...s.history, `Peak picking · ${peaks.length} peaks`],
     }));
     setTable("Peaks");
-    setTableOpen(true);
-    notify(`${peaks.length} peaks picked`);
+    notify(`${peaks.length} lines picked`);
   }
   function addIntegral(from = regionFrom, to = regionTo) {
-    if (!active || busy) return;
-    if (from === to) {
+    if (!active || busy || active.twoD) return;
+    if (!Number.isFinite(from) || !Number.isFinite(to) || from === to) {
       notify("Choose a region with two different limits.");
       return;
     }
@@ -880,11 +941,15 @@ export default function App() {
         setKinTo(Math.min(from, to));
         setFitEnabled(false);
         setTable("Integrals");
-        setTableOpen(true);
         notify(`Shared integral added to ${updates.size} stack members`);
       } catch (e) {
         notify(err(e));
       }
+      return;
+    }
+    const limits = extent(active.data, active.referenceOffset);
+    if (Math.min(from, to) < limits[1] || Math.max(from, to) > limits[0]) {
+      notify("Integral limits must be inside the spectrum.");
       return;
     }
     const area = integrate(active.data, active.referenceOffset, from, to);
@@ -902,11 +967,10 @@ export default function App() {
     }));
     setSelectedIntegral(integral.id);
     setTable("Integrals");
-    setTableOpen(true);
-    notify("Integral added");
+    notify("Integral added · click or right-click its label to edit");
   }
   function addMultiplet(from = regionFrom, to = regionTo) {
-    if (!active || busy) return;
+    if (!active || busy || active.twoD) return;
     const m = analyzeMultiplet(
       active.data,
       active.referenceOffset,
@@ -922,7 +986,6 @@ export default function App() {
       ],
     }));
     setTable("Multiplets");
-    setTableOpen(true);
     notify(`Multiplet added · ${m.kind} · review overlapping signals`);
   }
   function region(a: number, b: number) {
@@ -971,7 +1034,8 @@ export default function App() {
       const radius = Math.max(
         2,
         Math.floor(
-          (active.data.x.length * Math.min(0.012, (view[0] - view[1]) * 0.01)) /
+          (active.data.x.length *
+            Math.min(0.002, (view[0] - view[1]) * 0.005)) /
             Math.abs(
               active.data.x[0] - active.data.x[active.data.x.length - 1],
             ),
@@ -1005,31 +1069,23 @@ export default function App() {
     notify(`Reference shifted by ${delta.toFixed(4)} ppm`);
   }
   function autoIntegrals() {
-    if (!active || busy) return;
-    const peaks = detectPeaks(
-      active.data,
-      active.referenceOffset,
-      threshold,
-      minDistance,
-      negative,
-    );
-    const regions: { from: number; to: number }[] = [];
-    for (const p of [...peaks].sort((a, b) => a.ppm - b.ppm)) {
-      const last = regions[regions.length - 1];
-      if (last && p.ppm - 0.04 <= last.from) last.from = p.ppm + 0.04;
-      else regions.push({ from: p.ppm + 0.04, to: p.ppm - 0.04 });
-    }
-    changeActive((s) => ({
-      ...s,
-      integrals: regions.map((r, i) => ({
-        ...r,
-        id: uid(),
-        label: `I${i + 1}`,
-        area: integrate(s.data, s.referenceOffset, r.from, r.to),
-      })),
+    if (!active || busy || active.twoD) return;
+    const regions = autoMultiplets(active).map(({ from, to }) => ({
+      from,
+      to,
     }));
+    changeActive((s) =>
+      recalibrateIntegrals(
+        s,
+        regions.map((r, i) => ({
+          ...r,
+          id: uid(),
+          label: `I${i + 1}`,
+          area: integrate(s.data, s.referenceOffset, r.from, r.to),
+        })),
+      ),
+    );
     setTable("Integrals");
-    setTableOpen(true);
     notify(
       `${regions.length} suggested integral regions. Review boundaries before reporting.`,
     );
@@ -1041,8 +1097,80 @@ export default function App() {
       notify("Choose a nonzero integral first.");
       return;
     }
-    changeActive((s) => ({ ...s, integralScale: normalValue / i.area }));
+    changeActive((s) => calibrateIntegral(s, i.id, normalValue));
     notify("Integral reporting scale updated");
+  }
+  function selectPlotIntegral(spectrumId: string, integralId: string) {
+    if (busy) return;
+    setActiveId(spectrumId);
+    setSelectedIntegral(integralId);
+    setSelected([]);
+    setSelectedStackId(null);
+  }
+  function editPlotIntegral(spectrumId: string, integralId: string) {
+    selectPlotIntegral(spectrumId, integralId);
+    setIntegralEdit({ spectrumId, integralId });
+    setContextMenu(null);
+  }
+  function resizeIntegral(
+    spectrumId: string,
+    integralId: string,
+    from: number,
+    to: number,
+  ) {
+    if (busy || !Number.isFinite(from) || !Number.isFinite(to) || from === to)
+      return;
+    const source = spectra.find((s) => s.id === spectrumId);
+    if (!source) return;
+    const shared =
+      !!activeStack &&
+      massIntegral &&
+      stackMembers.every((s) => s.integrals.some((i) => i.id === integralId));
+    const ids = new Set(shared ? stackMembers.map((s) => s.id) : [spectrumId]);
+    const bounds = [...ids].map((id) => spectra.find((s) => s.id === id)!);
+    if (
+      bounds.some(
+        (s) =>
+          Math.min(from, to) < extent(s.data, s.referenceOffset)[1] ||
+          Math.max(from, to) > extent(s.data, s.referenceOffset)[0],
+      )
+    ) {
+      notify("Integral limits must be inside every selected spectrum.");
+      return;
+    }
+    commit(
+      spectra.map((s) =>
+        ids.has(s.id)
+          ? recalibrateIntegrals(
+              s,
+              s.integrals.map((i) =>
+                i.id === integralId
+                  ? {
+                      ...i,
+                      from: Math.max(from, to),
+                      to: Math.min(from, to),
+                      area: integrate(s.data, s.referenceOffset, from, to),
+                    }
+                  : i,
+              ),
+            )
+          : s,
+      ),
+    );
+  }
+  function deletePlotIntegral(spectrumId: string, integralId?: string) {
+    commit(
+      spectra.map((s) =>
+        s.id === spectrumId
+          ? recalibrateIntegrals(
+              s,
+              integralId ? s.integrals.filter((i) => i.id !== integralId) : [],
+            )
+          : s,
+      ),
+    );
+    setSelectedIntegral("");
+    setContextMenu(null);
   }
   function gain(factor: number) {
     if (busy) return;
@@ -1061,6 +1189,8 @@ export default function App() {
     if (!active || busy) return;
     const s = {
       ...active,
+      integralCalibration: undefined,
+      integralScale: 1,
       id: uid(),
       label: active.label + " copy",
       color: colors[spectra.length % colors.length],
@@ -1131,6 +1261,10 @@ export default function App() {
   }
   function createStack() {
     const members = spectra.filter((s) => selected.includes(s.id));
+    if (members.some((s) => s.twoD)) {
+      notify("Select 1D spectra for stacking and kinetics.");
+      return;
+    }
     if (members.length < 2) {
       notify("Shift-click at least two spectra, then click Stack selected.");
       return;
@@ -1162,7 +1296,7 @@ export default function App() {
     setMode("stack");
     setTab("Stack");
     setPanel("stack");
-    setInspectorOpen(true);
+    setInspectorOpen(false);
     setTool("select");
     setPreview(null);
     setFitEnabled(false);
@@ -1269,6 +1403,15 @@ export default function App() {
   }
   function enterTab(t: Tab) {
     if (busy) return;
+    if (
+      active?.twoD &&
+      (t === "Kinetics" || t === "Stack" || t === "Processing")
+    ) {
+      notify(
+        "Open a 1D spectrum for this workflow. 2D contour controls are on the spectrum.",
+      );
+      return;
+    }
     setTab(t);
     if (t === "Stack") {
       setPanel("stack");
@@ -1281,7 +1424,7 @@ export default function App() {
         setDraft((d) => ({ ...d, transform: true }));
     }
     if (t === "Home" || t === "Analysis") setPanel("overview");
-    setInspectorOpen(t !== "Kinetics");
+    setInspectorOpen(false);
   }
   async function saveProject() {
     if (busy) return;
@@ -1375,7 +1518,9 @@ export default function App() {
       standardConcentration: stdConcentration,
       concentrationUnit,
       excludedIds: excluded,
-      spectrumIds: activeStack?.spectrumIds,
+      spectrumIds:
+        activeStack?.spectrumIds ??
+        spectra.filter((s) => !s.twoD).map((s) => s.id),
       nucleus: active?.nucleus,
     }),
     [
@@ -1390,6 +1535,7 @@ export default function App() {
       concentrationUnit,
       excluded,
       activeStack,
+      spectra,
       active?.nucleus,
     ],
   );
@@ -1443,18 +1589,20 @@ export default function App() {
       }
       if (e.key === "Escape") {
         e.preventDefault();
-        if (propertiesOpen) setPropertiesOpen(false);
+        if (integralEdit) setIntegralEdit(null);
+        else if (propertiesOpen) setPropertiesOpen(false);
         else if (contextMenu) setContextMenu(null);
         else if (help) setHelp(false);
         else cancelPreview();
         return;
       }
-      if (busy || propertiesOpen) return;
+      if (busy || propertiesOpen || integralEdit) return;
       if (baselineOpen && k !== "b") return;
       if (e.shiftKey && k === "p") {
         e.preventDefault();
         enterTab("Processing");
         setPanel("phase");
+        setInspectorOpen(true);
         return;
       }
       if (e.shiftKey && k === "i") {
@@ -1548,6 +1696,7 @@ export default function App() {
     baselineOpen,
     propertiesOpen,
     contextMenu,
+    integralEdit,
     activeStack,
   ]);
   const processActions = (
@@ -1557,14 +1706,22 @@ export default function App() {
           icon={Sparkles}
           label="Auto phase"
           onClick={autoPhase}
-          disabled={!active || (!active.data.imag && !active.fid) || !!busy}
+          disabled={
+            !active ||
+            !!active.twoD ||
+            (!active.data.imag && !active.fid) ||
+            !!busy
+          }
         />
         <RibbonButton
           icon={SlidersHorizontal}
           label="Manual phase"
           shortcut="⇧ P"
           active={panel === "phase"}
-          onClick={() => setPanel("phase")}
+          onClick={() => {
+            setPanel("phase");
+            setInspectorOpen(true);
+          }}
         />
         <span className="group-label">Phase</span>
       </div>
@@ -1597,7 +1754,7 @@ export default function App() {
           label="Baseline correction"
           shortcut="B"
           onClick={() => openBaseline()}
-          disabled={!active || !!busy}
+          disabled={!active || !!active.twoD || !!busy}
         />
         <RibbonButton
           icon={Settings2}
@@ -1644,7 +1801,7 @@ export default function App() {
           icon={Sparkles}
           label="Auto peaks"
           onClick={() => autoPeaks()}
-          disabled={!active}
+          disabled={!active || !!active.twoD}
         />
         <RibbonButton
           icon={Activity}
@@ -1667,7 +1824,23 @@ export default function App() {
           icon={Sparkles}
           label="Auto integrals"
           onClick={autoIntegrals}
-          disabled={!active}
+          disabled={!active || !!active.twoD}
+        />
+        <RibbonButton
+          icon={Settings2}
+          label="Integral controls"
+          onClick={() => {
+            setPanel("integral");
+            setInspectorOpen((v) => !v);
+          }}
+        />
+        <RibbonButton
+          icon={FileText}
+          label="Integral table"
+          onClick={() => {
+            setTable("Integrals");
+            setTableOpen((v) => !v);
+          }}
         />
         <span className="group-label">Integration</span>
       </div>
@@ -1680,6 +1853,25 @@ export default function App() {
           onClick={() => toolMode("multiplet", "multiplet")}
         />
         <RibbonButton
+          icon={Sparkles}
+          label="Auto multiplets"
+          disabled={!active || !!active.twoD}
+          onClick={() => {
+            if (!active) return;
+            const ms = autoMultiplets(active);
+            changeActive((s) => ({
+              ...s,
+              multiplets: ms,
+              history: [
+                ...s.history,
+                `Auto multiplets · ${ms.length} suggested groups`,
+              ],
+            }));
+            setTable("Multiplets");
+            notify(`${ms.length} multiplets analyzed · review assignments`);
+          }}
+        />
+        <RibbonButton
           icon={Trash2}
           label="Clear analysis"
           onClick={() =>
@@ -1687,6 +1879,8 @@ export default function App() {
               ...s,
               peaks: [],
               integrals: [],
+              integralCalibration: undefined,
+              integralScale: 1,
               multiplets: [],
             }))
           }
@@ -1867,13 +2061,19 @@ export default function App() {
             <div className="ribbon-group">
               <RibbonButton
                 icon={Maximize2}
-                label="Normalize"
-                active={normalization !== "none"}
-                onClick={() =>
-                  setNormalization((n) =>
-                    n === "maximum" ? "none" : "maximum",
-                  )
-                }
+                label="Auto normalize all"
+                active={normalization === "maximum"}
+                onClick={() => {
+                  setNormalization("maximum");
+                  setPlotGain(1);
+                  const ids = new Set(
+                    (activeStack ? stackMembers : spectra).map((s) => s.id),
+                  );
+                  commit(
+                    spectra.map((s) => (ids.has(s.id) ? { ...s, gain: 1 } : s)),
+                  );
+                  notify("All spectrum heights normalized");
+                }}
               />
               <RibbonButton
                 icon={Plus}
@@ -1978,6 +2178,7 @@ export default function App() {
               <RibbonButton
                 icon={Download}
                 label="JCAMP-DX"
+                disabled={!!active?.twoD}
                 onClick={() => active && exportJCAMP(active)}
               />
               <RibbonButton
@@ -2282,7 +2483,11 @@ export default function App() {
                       </span>
                     </div>
                     <div className="thumbnail">
-                      <MiniTrace spectrum={s} />
+                      {s.twoD ? (
+                        <MiniTwoD spectrum={s} />
+                      ) : (
+                        <MiniTrace spectrum={s} />
+                      )}
                     </div>
                     <div className="card-meta">
                       <span>{s.nucleus}</span>
@@ -2365,6 +2570,7 @@ export default function App() {
                 </select>
               )}
               <select
+                disabled={!!active?.twoD}
                 aria-label="Spectrum component"
                 value={component}
                 onChange={(e) => {
@@ -2380,7 +2586,11 @@ export default function App() {
                   setComponent(c);
                 }}
               >
-                <option value="real">Real spectrum</option>
+                <option value="real">
+                  {active?.twoD
+                    ? `${active.twoD.experiment} · ${active.twoD.mode} contours`
+                    : "Real spectrum"}
+                </option>
                 <option value="imag">Imaginary</option>
                 <option value="magnitude">Magnitude</option>
                 <option value="fid">FID</option>
@@ -2624,7 +2834,9 @@ export default function App() {
                   <tbody>
                     {(activeStack
                       ? stackMembers
-                      : spectra.filter((s) => s.nucleus === active?.nucleus)
+                      : spectra.filter(
+                          (s) => !s.twoD && s.nucleus === active?.nucleus,
+                        )
                     ).map((s) => {
                       const p = kineticsPoints.find((v) => v.id === s.id);
                       const measurement = kineticMeasurements.find(
@@ -2717,38 +2929,58 @@ export default function App() {
                   setContextMenu({ x: e.clientX, y: e.clientY });
                 }}
               >
-                <SpectrumPlot
-                  spectra={plottedSpectra}
-                  active={displayedActive}
-                  view={view}
-                  mode={mode}
-                  normalization={normalization}
-                  tool={tool}
-                  gain={plotGain}
-                  component={component}
-                  grid={grid}
-                  showPeaks={showPeaks}
-                  showIntegrals={showIntegrals}
-                  onRegion={region}
-                  onPoint={point}
-                  onCursor={setCursor}
-                  onZoom={zoom}
-                  onGain={gain}
-                  onSelect={(id, multi) =>
-                    selectSpectrum(id, multi, false, !!activeStack)
-                  }
-                  onDeselect={() => {
-                    setSelected([]);
-                    setSelectedStackId(null);
-                  }}
-                  selected={selected}
-                  properties={activeProperties}
-                  baseline={baselineOpen ? baselineCurve : null}
-                  handAlign={handAlign && !!activeStack}
-                  onShift={shiftMember}
-                  onFit={full}
-                  exportRef={svgExport}
-                />
+                {active.twoD ? (
+                  <TwoDPlot
+                    spectrum={active}
+                    tool={tool}
+                    grid={grid}
+                    properties={activeProperties}
+                    exportRef={svgExport}
+                    fullRef={twoDFull}
+                  />
+                ) : (
+                  <SpectrumPlot
+                    spectra={plottedSpectra}
+                    active={displayedActive}
+                    view={view}
+                    mode={mode}
+                    normalization={normalization}
+                    tool={tool}
+                    gain={plotGain}
+                    component={component}
+                    grid={grid}
+                    showPeaks={showPeaks}
+                    showIntegrals={showIntegrals}
+                    onRegion={region}
+                    onPoint={point}
+                    onCursor={setCursor}
+                    onZoom={zoom}
+                    onGain={gain}
+                    onSelect={(id, multi) =>
+                      selectSpectrum(id, multi, false, !!activeStack)
+                    }
+                    onDeselect={() => {
+                      setSelected([]);
+                      setSelectedStackId(null);
+                      setSelectedIntegral("");
+                    }}
+                    selected={selected}
+                    properties={activeProperties}
+                    baseline={baselineOpen ? baselineCurve : null}
+                    handAlign={handAlign && !!activeStack}
+                    onShift={shiftMember}
+                    selectedIntegral={selectedIntegral}
+                    onIntegralSelect={selectPlotIntegral}
+                    onIntegralEdit={editPlotIntegral}
+                    onIntegralResize={resizeIntegral}
+                    onIntegralMenu={(spectrumId, integralId, x, y) => {
+                      selectPlotIntegral(spectrumId, integralId);
+                      setContextMenu({ x, y, spectrumId, integralId });
+                    }}
+                    onFit={full}
+                    exportRef={svgExport}
+                  />
+                )}
               </div>
               {preview && (
                 <div className="preview-badge">
@@ -2950,19 +3182,21 @@ export default function App() {
                               <td>{i.to.toFixed(3)}</td>
                               <td>{i.area.toPrecision(6)}</td>
                               <td className="normalized-value">
-                                {(i.area * active.integralScale).toFixed(3)}
+                                {displayedIntegralValue(active, i).toFixed(3)}
                               </td>
                               <td>
                                 <button
                                   className="icon-button"
                                   aria-label={`Remove integral ${i.label}`}
                                   onClick={() =>
-                                    changeActive((s) => ({
-                                      ...s,
-                                      integrals: s.integrals.filter(
-                                        (a) => a.id !== i.id,
+                                    changeActive((s) =>
+                                      recalibrateIntegrals(
+                                        s,
+                                        s.integrals.filter(
+                                          (a) => a.id !== i.id,
+                                        ),
                                       ),
-                                    }))
+                                    )
                                   }
                                 >
                                   <X size={12} />
@@ -3158,6 +3392,9 @@ export default function App() {
               <button
                 className={tool === t ? "active" : ""}
                 key={t}
+                disabled={
+                  !!active?.twoD && !["select", "zoom", "pan"].includes(t)
+                }
                 aria-label={`${toolText[t]} tool`}
                 title={`${toolText[t]} ${key && "(" + key + ")"}`}
                 onClick={() =>
@@ -3782,8 +4019,9 @@ export default function App() {
                           Normalize
                         </button>
                         <p className="muted-small">
-                          Raw signed areas are preserved. Normalized values are
-                          for reporting.
+                          Unnormalized values are relative to the first signal.
+                          A known integral fixes the reporting scale; raw areas
+                          stay available in the table.
                         </p>
                       </>
                     ) : (
@@ -4068,6 +4306,7 @@ export default function App() {
                     </button>
                     <button
                       className="secondary full-width"
+                      disabled={!!active.twoD}
                       onClick={() => exportJCAMP(active)}
                     >
                       <Download size={14} />
@@ -4110,7 +4349,9 @@ export default function App() {
             : ""}
         </span>
         <span>
-          {active?.data.real.length.toLocaleString()} points
+          {active?.twoD
+            ? `${active.twoD.width.toLocaleString()} × ${active.twoD.height.toLocaleString()} 2D`
+            : `${active?.data.real.length.toLocaleString()} points`}
           <span className="status-divider">|</span>
           {scope === "active"
             ? "Active spectrum"
@@ -4182,8 +4423,9 @@ export default function App() {
               ))}
             </ul>
             <p>
-              Supported here: Bruker 1D, supported JCAMP-DX, CSV and TSV. True
-              2D processing is a later extension.
+              Supported here: Bruker 1D and processed 2D (including NOESY),
+              supported JCAMP-DX, CSV and TSV. Import the complete experiment
+              folder or ZIP, including pdata.
             </p>
             <button className="primary" onClick={() => setWarnings([])}>
               Continue
@@ -4231,9 +4473,81 @@ export default function App() {
           role="menu"
           style={{
             left: Math.max(8, Math.min(window.innerWidth - 190, contextMenu.x)),
-            top: Math.max(8, Math.min(window.innerHeight - 230, contextMenu.y)),
+            top: Math.max(
+              8,
+              Math.min(
+                window.innerHeight - (contextMenu.integralId ? 390 : 230),
+                contextMenu.y,
+              ),
+            ),
           }}
         >
+          {contextMenu.integralId && contextMenu.spectrumId && (
+            <>
+              <button
+                role="menuitem"
+                onClick={() =>
+                  editPlotIntegral(
+                    contextMenu.spectrumId!,
+                    contextMenu.integralId!,
+                  )
+                }
+              >
+                Edit Integral…
+              </button>
+              <button
+                role="menuitem"
+                onClick={() => {
+                  setTable("Integrals");
+                  setTableOpen(true);
+                  setContextMenu(null);
+                }}
+              >
+                Show Table of Integrals
+              </button>
+              <button
+                role="menuitem"
+                onClick={() =>
+                  deletePlotIntegral(
+                    contextMenu.spectrumId!,
+                    contextMenu.integralId,
+                  )
+                }
+              >
+                Delete Integral
+              </button>
+              <button
+                role="menuitem"
+                onClick={() => deletePlotIntegral(contextMenu.spectrumId!)}
+              >
+                Delete All
+              </button>
+              <button
+                role="menuitem"
+                onClick={() => {
+                  try {
+                    const id = contextMenu.spectrumId;
+                    commit(
+                      spectra.map((s) =>
+                        s.id === id ? autodetectIntegralCounts(s) : s,
+                      ),
+                    );
+                  } catch (e) {
+                    notify(err(e));
+                    setContextMenu(null);
+                    return;
+                  }
+                  setContextMenu(null);
+                  notify(
+                    "Tentative nuclide counts estimated · review and normalize against a known signal",
+                  );
+                }}
+              >
+                Autodetect Nuclides Count…
+              </button>
+              <hr />
+            </>
+          )}
           <button
             role="menuitem"
             onClick={() => {
@@ -4282,6 +4596,84 @@ export default function App() {
           </button>
         </div>
       )}
+      {integralEdit &&
+        (() => {
+          const s = spectra.find((v) => v.id === integralEdit.spectrumId),
+            i = s?.integrals.find((v) => v.id === integralEdit.integralId);
+          return s && i ? (
+            <IntegralDialog
+              spectrum={s}
+              integral={i}
+              stack={!!activeStack}
+              onClose={() => setIntegralEdit(null)}
+              onApply={(from, to, label, value, all, normalize) => {
+                const ids = new Set(
+                  all && activeStack
+                    ? stackMembers
+                        .filter((v) => v.integrals.some((k) => k.id === i.id))
+                        .map((v) => v.id)
+                    : [s.id],
+                );
+                if (
+                  !Number.isFinite(value) ||
+                  value <= 0 ||
+                  from === to ||
+                  [...ids].some((id) => {
+                    const b = extent(
+                      spectra.find((v) => v.id === id)!.data,
+                      spectra.find((v) => v.id === id)!.referenceOffset,
+                    );
+                    return (
+                      Math.min(from, to) < b[1] || Math.max(from, to) > b[0]
+                    );
+                  })
+                ) {
+                  notify("Enter valid limits and a positive normalized value.");
+                  return;
+                }
+                try {
+                  commit(
+                    spectra.map((v) =>
+                      ids.has(v.id)
+                        ? ((updated: Spectrum) =>
+                            normalize
+                              ? calibrateIntegral(updated, i.id, value)
+                              : updated)(
+                            recalibrateIntegrals(
+                              v,
+                              v.integrals.map((k) =>
+                                k.id === i.id
+                                  ? {
+                                      ...k,
+                                      from: Math.max(from, to),
+                                      to: Math.min(from, to),
+                                      label,
+                                      area: integrate(
+                                        v.data,
+                                        v.referenceOffset,
+                                        from,
+                                        to,
+                                      ),
+                                    }
+                                  : k,
+                              ),
+                            ),
+                          )
+                        : v,
+                    ),
+                  );
+                } catch (e) {
+                  notify(err(e));
+                  return;
+                }
+                setIntegralEdit(null);
+                notify(
+                  "Integral updated; normalization retained during processing",
+                );
+              }}
+            />
+          ) : null;
+        })()}
       {propertiesOpen && active && (
         <PropertiesDialog
           spectrum={active}
@@ -4383,8 +4775,9 @@ export default function App() {
               Use <b>Open folder</b> for a complete Bruker experiment, or ZIP it
               and use <b>Open files</b>. Processed data are preferred when
               available. CSV needs two numeric columns (ppm, intensity); JCAMP
-              supports the defined 1D profile. Native Mnova projects and raw 2D
-              experiments are not read here.
+              supports the defined 1D profile. Bruker processed 2D and raw
+              States/States-TPPI magnitude data are supported. Native Mnova
+              projects and other raw 2D modes are not read here.
             </p>
             <a
               href="https://mestrelab.com/downloads/mnova/manuals/latest/shortcuts.html"

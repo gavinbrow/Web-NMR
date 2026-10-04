@@ -1,3 +1,4 @@
+import { displayedIntegralValue, integralReportingScale } from "./integrals";
 import type { KineticFit, KineticPoint, Spectrum } from "../model";
 import type {
   KineticMeasurement,
@@ -27,6 +28,21 @@ function csvDownload(text: string, name: string) {
   return text;
 }
 export function spectrumCSV(s: Spectrum): string {
+  if (s.twoD) {
+    const m = s.twoD,
+      lines = [
+        "F1_ppm/F2_ppm," +
+          Array.from(m.x, (x) => x + s.referenceOffset).join(","),
+      ];
+    for (let row = 0; row < m.height; row++)
+      lines.push(
+        `${m.y[row] + m.referenceOffsetF1},` +
+          Array.from(m.real.subarray(row * m.width, (row + 1) * m.width)).join(
+            ",",
+          ),
+      );
+    return lines.join("\r\n");
+  }
   const lines = ["ppm,real" + (s.data.imag ? ",imaginary" : "")];
   for (let i = 0; i < s.data.x.length; i++)
     lines.push(
@@ -64,8 +80,8 @@ export function analysisCSV(
         i.from,
         i.to,
         i.area,
-        i.area * s.integralScale,
-        s.integralScale,
+        displayedIntegralValue(s, i),
+        integralReportingScale(s),
       ]),
     ]);
   return makeCSV([

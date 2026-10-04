@@ -26,7 +26,7 @@ const sections: Record<Exclude<Section, "Metadata">, Definition[]> = {
     ["background", "Background color"],
     ["backgroundOpacity", "Background opacity (%)"],
     ["title", "Show title"],
-    ["titleText", "Title text (blank uses spectrum name)"],
+    ["titleText", "Title text (blank uses file title)"],
     [
       "titleFont",
       "Title font",

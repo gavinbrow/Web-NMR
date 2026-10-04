@@ -108,7 +108,27 @@ export interface Multiplet {
   peakCount: number;
   label: string;
 }
+export interface TwoDSpectrum {
+  /** F2 columns and F1 rows; both axes descend in ppm. */
+  x: Float64Array;
+  y: Float64Array;
+  /** Row-major matrix: real[rowF1 * width + columnF2]. */
+  real: Float64Array;
+  width: number;
+  height: number;
+  nucleusF1: string;
+  frequencyF1: number;
+  referenceOffsetF1: number;
+  imagF2?: Float64Array;
+  imagF1?: Float64Array;
+  imagBoth?: Float64Array;
+  experiment: string;
+  source: "Bruker processed 2D" | "Bruker raw 2D magnitude";
+  mode: "absorption" | "magnitude";
+  acquisitionMode?: "States" | "States-TPPI";
+}
 export interface Spectrum {
+  twoD?: TwoDSpectrum;
   properties?: SpectrumProperties;
   id: string;
   label: string;
@@ -126,6 +146,7 @@ export interface Spectrum {
   integrals: Integral[];
   multiplets: Multiplet[];
   integralScale: number;
+  integralCalibration?: { anchorId: string; target: number; tentative?: boolean };
   gain: number;
   visible: boolean;
   timeMinutes?: number;
