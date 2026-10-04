@@ -1,0 +1,638 @@
+.kinetics-workspace.kinetics-studio {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  margin: 10px 12px 12px;
+  padding: 0;
+  background: #252930;
+  border: 1px solid #444c58;
+  border-radius: 6px;
+  box-shadow: 0 3px 12px #16191d40;
+  container-type: inline-size;
+}
+.kinetics-studio-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  flex: none;
+  border-bottom: 1px solid #414854;
+}
+.kinetics-studio-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.kinetics-studio-title h1 {
+  font-size: 17px;
+  font-weight: 600;
+  color: #f0f3f8;
+  margin: 0 0 3px;
+  letter-spacing: -0.2px;
+}
+.kinetics-studio-title p {
+  margin: 0;
+  color: #a6b2c2;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kinetics-studio-title > div {
+  min-width: 0;
+}
+.kinetics-header-actions {
+  display: flex;
+  gap: 7px;
+  flex: none;
+}
+.kinetics-header-actions button {
+  height: 30px;
+  font-size: 11px;
+  padding: 0 10px;
+}
+.kinetics-header-actions .is-active {
+  border-color: #a15a71;
+  background: #4b303d;
+  color: #ffd0df;
+}
+.kinetics-command-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+  padding: 8px 12px;
+  flex: none;
+}
+.kinetics-view-switch {
+  display: flex;
+  gap: 2px;
+  background: #1c2026;
+  padding: 3px;
+  border: 1px solid #414854;
+  border-radius: 5px;
+}
+.kinetics-view-switch button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  color: #aeb9c9;
+  font-size: 11px;
+  border-radius: 3px;
+}
+.kinetics-view-switch button[aria-selected="true"] {
+  background: #444b56;
+  color: white;
+}
+.kinetics-region-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #b8d9fb;
+  background: #22344a;
+  border: 1px solid #355473;
+  white-space: nowrap;
+}
+.kinetics-region-chip:hover {
+  background: #2d4662;
+}
+.kinetics-region-chip i {
+  background: #1689e9;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.kinetics-region-chip.standard {
+  color: #b1e0cc;
+  background: #213b34;
+  border-color: #3e6354;
+}
+.kinetics-region-chip.standard i {
+  background: #46a381;
+}
+.kinetics-mode-label {
+  font-size: 10px;
+  color: #9eabba;
+}
+.kinetics-fit-button {
+  margin-left: auto;
+  height: 30px;
+  padding: 0 11px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.kinetics-plot-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 160px;
+  min-width: 0;
+  margin: 0 10px 8px;
+  background: #fff;
+  border: 1px solid #bbc2cc;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.kinetics-plot-caption {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  padding: 7px 15px;
+  font-size: 11px;
+  color: #435165;
+}
+.kinetics-point-count {
+  color: #7e8999;
+}
+.kinetics-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 10px;
+  color: #687489;
+}
+.kinetics-legend span {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+.kinetics-legend i {
+  width: 6px;
+  height: 6px;
+  background: #a73249;
+  border-radius: 50%;
+}
+.kinetics-legend .fit i {
+  width: 15px;
+  height: 2px;
+  background: #1689e9;
+  border-radius: 0;
+}
+.kinetics-studio .kinetics-chart-host {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  position: relative;
+}
+.kinetics-studio .kinetics-chart {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+}
+.kinetics-chart .kinetics-observation {
+  cursor: pointer;
+  outline: none;
+}
+.kinetics-chart .kinetics-observation:focus circle {
+  stroke: #1689e9;
+  stroke-width: 3px;
+}
+.kinetics-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  gap: 10px;
+  text-align: center;
+  color: #526075;
+}
+.kinetics-empty h2 {
+  font-size: 17px;
+  font-weight: 600;
+  margin: 0;
+  color: #374355;
+}
+.kinetics-empty p {
+  font-size: 12px;
+  line-height: 1.6;
+  max-width: 380px;
+  margin: 0;
+}
+.kinetics-empty > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 5px;
+}
+.kinetics-empty button {
+  font-size: 11px;
+  height: 32px;
+}
+.kinetics-empty .secondary {
+  background: #edf1f6;
+  color: #435165;
+  border-color: #c7d0de;
+}
+.kinetics-spectrum-stage {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.kinetics-spectrum-stage .spectrum-plot {
+  flex: 1;
+  min-height: 100px;
+  width: 100%;
+}
+.kinetics-spectrum-toolbar {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  padding: 5px 10px;
+  background: #f5f7fa;
+  border-bottom: 1px solid #dde3eb;
+  color: #6b788c;
+  min-height: 33px;
+  flex: none;
+}
+.kinetics-spectrum-toolbar > button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 25px;
+  border-radius: 3px;
+}
+.kinetics-spectrum-toolbar > button:hover {
+  background: #e4eaf2;
+}
+.kinetics-spectrum-toolbar > button.is-active {
+  background: #d8e9f9;
+  box-shadow: inset 0 0 0 1px #96bfed;
+}
+.kinetics-spectrum-toolbar > span {
+  font-size: 10px;
+  margin-left: 7px;
+}
+.kinetics-spectrum-toolbar > .kinetics-cancel-pick {
+  width: auto;
+  gap: 4px;
+  padding: 0 6px;
+  margin-left: auto;
+  font-size: 10px;
+}
+.kinetics-results-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px 22px;
+  align-items: center;
+  padding: 5px 16px 10px;
+  color: #9faec0;
+  font-size: 10px;
+  flex: none;
+}
+.kinetics-results-strip b {
+  color: #f2c1d1;
+  font-weight: 550;
+  padding-left: 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.kinetics-results-strip details {
+  position: relative;
+  margin-left: auto;
+}
+.kinetics-results-strip summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  list-style: none;
+}
+.kinetics-results-strip details > div {
+  position: absolute;
+  bottom: 25px;
+  right: 0;
+  width: 230px;
+  z-index: 4;
+  background: #272d36;
+  border: 1px solid #535f70;
+  border-radius: 5px;
+  padding: 10px;
+  box-shadow: 0 4px 18px #0005;
+}
+.kinetics-results-strip details > div span {
+  display: flex;
+  justify-content: space-between;
+  padding: 5px;
+}
+.kinetics-fit-error {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 14px 10px;
+  color: #eac28d;
+  font-size: 11px;
+  flex: none;
+}
+.kinetics-fit-error button {
+  color: #f4b3c7;
+  text-decoration: underline;
+  white-space: nowrap;
+}
+.kinetics-data-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  min-height: 35px;
+  padding: 0 13px;
+  background: #2e343e;
+  border-top: 1px solid #444e5c;
+}
+.kinetics-data-bar > button {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  font-size: 11px;
+  color: #d5dfec;
+  padding: 8px 0;
+}
+.kinetics-data-bar > button span {
+  background: #444d5a;
+  color: #c9d5e4;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 9px;
+}
+.kinetics-data-bar .rotated {
+  transform: rotate(180deg);
+}
+.kinetics-data-bar > div {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.kinetics-data-bar small {
+  font-size: 9px;
+  color: #93a1b3;
+}
+.kinetics-data-bar .kinetics-attention {
+  color: #f4c98a;
+  font-size: 10px;
+}
+.kinetics-data-bar button.kinetics-attention {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.kinetics-studio .kinetics-data-table {
+  flex: 0 1 180px;
+  min-height: 80px;
+  max-height: 30%;
+  border: 0;
+  border-radius: 0;
+  background: #272d36;
+}
+.kinetics-data-table table {
+  font-size: 11px;
+}
+.kinetics-data-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 7px 10px;
+}
+.kinetics-data-table td {
+  padding: 5px 10px;
+  font-variant-numeric: tabular-nums;
+}
+.kinetics-data-table tr.kinetics-active-row {
+  background: #403440;
+}
+.kinetics-data-table .kinetics-measurement {
+  color: #f2bbce;
+}
+.kinetics-data-table input[type="number"] {
+  width: 88px;
+  font-size: 11px;
+}
+.kinetics-spectrum-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: inherit;
+  color: #d6e1ef;
+  text-align: left;
+}
+.kinetics-spectrum-link i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+}
+.kinetics-data-table .measurement-status {
+  max-width: 280px;
+  font-size: 10px;
+  white-space: normal;
+  line-height: 1.4;
+}
+.kinetics-data-table .has-error {
+  color: #eac28d;
+}
+.kinetics-setup {
+  position: absolute;
+  top: 55px;
+  right: 12px;
+  width: 330px;
+  min-width: 290px;
+  max-width: calc(100% - 24px);
+  max-height: calc(100% - 68px);
+  min-height: 230px;
+  display: flex;
+  flex-direction: column;
+  z-index: 12;
+  background: #22262d;
+  color: #d7e1ef;
+  border: 1px solid #596678;
+  border-radius: 7px;
+  box-shadow: 0 8px 32px #0009;
+  resize: both;
+  overflow: hidden;
+}
+.kinetics-setup-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: none;
+  padding: 10px 13px;
+  border-bottom: 1px solid #424c5b;
+  background: #2d333e;
+}
+.kinetics-setup-heading h2 {
+  font-size: 13px;
+  color: #eff4fc;
+  font-weight: 600;
+  margin: 0;
+}
+.kinetics-setup-body {
+  padding: 0 14px;
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+}
+.kinetics-setup-body section {
+  padding: 13px 0 2px;
+  border-bottom: 1px solid #394350;
+}
+.kinetics-setup-body section:last-child {
+  border-bottom: 0;
+}
+.kinetics-setup h3 {
+  color: #d3dfed;
+  font-size: 11px;
+  font-weight: 600;
+  margin: 0 0 12px;
+}
+.kinetics-setup h4 {
+  color: #b6c4d4;
+  font-size: 10px;
+  font-weight: 500;
+  margin: 0 0 12px;
+}
+.kinetics-section-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+}
+.kinetics-section-heading button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: #8dc3fb;
+  padding: 0;
+}
+.kinetics-field-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+}
+.kinetics-setup .field {
+  margin-bottom: 11px;
+  min-width: 0;
+}
+.kinetics-setup .field > span {
+  font-size: 10px;
+  color: #aebcce;
+}
+.kinetics-setup input,
+.kinetics-setup select {
+  height: 31px;
+  font-size: 11px;
+  padding: 5px 8px;
+  background: #1b1f26;
+  border-color: #4a576a;
+}
+.kinetics-setup .kinetics-setup-note {
+  margin: -1px 0 10px;
+  color: #8f9fb3;
+  font-size: 10px;
+  line-height: 1.55;
+}
+.kinetics-setup-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  padding: 10px 13px;
+  background: #2b313b;
+  border-top: 1px solid #414c5b;
+}
+.kinetics-setup-footer span {
+  color: #9daec2;
+  font-size: 10px;
+}
+.kinetics-setup-footer button {
+  font-size: 11px;
+  padding: 5px 12px;
+}
+@container (max-width: 650px) {
+  .kinetics-mode-label,
+  .kinetics-data-bar small {
+    display: none;
+  }
+  .kinetics-plot-caption {
+    flex-wrap: wrap;
+    padding: 6px 10px;
+  }
+  .kinetics-spectrum-toolbar > span {
+    font-size: 9px;
+  }
+  .kinetics-results-strip {
+    gap: 7px 13px;
+  }
+}
+@container (max-width: 460px) {
+  .kinetics-studio-header {
+    padding: 9px 11px;
+  }
+  .kinetics-studio-title p {
+    font-size: 10px;
+  }
+  .kinetics-header-actions button {
+    padding: 0 7px;
+  }
+  .kinetics-header-actions button span {
+    display: none;
+  }
+  .kinetics-command-bar {
+    gap: 6px;
+    padding: 7px 8px;
+  }
+  .kinetics-region-chip {
+    order: 3;
+  }
+  .kinetics-setup {
+    width: calc(100% - 20px);
+    right: 10px;
+    top: 50px;
+    max-height: calc(100% - 60px);
+  }
+  .kinetics-point-count,
+  .kinetics-spectrum-toolbar > span {
+    display: none;
+  }
+  .kinetics-studio .kinetics-plot-area {
+    margin-left: 7px;
+    margin-right: 7px;
+  }
+  .kinetics-empty {
+    padding: 14px;
+  }
+  .kinetics-empty h2 {
+    font-size: 14px;
+  }
+  .kinetics-empty p {
+    font-size: 11px;
+  }
+  .kinetics-data-bar {
+    padding: 0 9px;
+  }
+  .kinetics-data-bar > button {
+    font-size: 10px;
+  }
+}

@@ -106,7 +106,8 @@ import { maximumProjection } from "./core/twoD";
 import { traceEnvelope, tracePath, f1Pixel } from "./features/twoDTraces";
 import { TwoDPlot, initialTwoDView } from "./components/TwoDPlot";
 import { NmrToolIcon, type NmrIconKind } from "./components/NmrToolIcon";
-import { KineticsChart } from "./components/KineticsChart";
+import { KineticsWorkspace } from "./components/KineticsWorkspace";
+import type { KineticsMeasurementOptions } from "./features/kinetics";
 
 type WorkspaceSnapshot = {
   spectra: Spectrum[];
@@ -567,7 +568,11 @@ export default function App() {
     [regionTo, setRegionTo] = useState(4),
     [normalValue, setNormalValue] = useState(1),
     [selectedIntegral, setSelectedIntegral] = useState("");
-  const [kinPicking, setKinPicking] = useState(false);
+  const [kinPicking, setKinPicking] = useState<"target" | "standard" | null>(
+    null,
+  );
+  const [kinView, setKinView] = useState<"curve" | "spectra">("curve"),
+    [kinSettingsOpen, setKinSettingsOpen] = useState(false);
   const [kinFrom, setKinFrom] = useState(4.24),
     [kinTo, setKinTo] = useState(4),
     [kinModel, setKinModel] = useState<"decay" | "growth" | "linear">("decay"),
@@ -1069,7 +1074,7 @@ export default function App() {
         baselineAnchors: [...active.recipe.baselineAnchors],
       });
     setTool("select");
-    setKinPicking(false);
+    setKinPicking(null);
     if (panel === "phase") setInspectorOpen(false);
     phaseEpoch.current++;
     phaseLatest.current = null;
@@ -1252,9 +1257,14 @@ export default function App() {
   }
   function region(a: number, b: number) {
     if (kinPicking) {
-      setKinFrom(Math.max(a, b));
-      setKinTo(Math.min(a, b));
-      setKinPicking(false);
+      if (kinPicking === "standard") {
+        setStdFrom(Math.max(a, b));
+        setStdTo(Math.min(a, b));
+      } else {
+        setKinFrom(Math.max(a, b));
+        setKinTo(Math.min(a, b));
+      }
+      setKinPicking(null);
       setFitEnabled(false);
       setTab("Kinetics");
       setInspectorOpen(false);
@@ -1772,6 +1782,44 @@ export default function App() {
       ].join(":"),
     )
     .join("|");
+  const kineticSpectra = useMemo(
+    () =>
+      activeStack
+        ? stackMembers
+        : spectra.filter((s) => !s.twoD && s.nucleus === active?.nucleus),
+    [spectra, activeStack, active?.nucleus],
+  );
+  const kineticProperties = useMemo(
+    () => ({
+      ...activeProperties,
+      stackHorizontalOffset: 0,
+      horizontalUnits: "ppm" as const,
+    }),
+    [activeProperties],
+  );
+  function pickKineticRegion(which: "target" | "standard") {
+    setKinView("spectra");
+    setKinSettingsOpen(false);
+    setKinPicking(which);
+    setTool("integral");
+    setInspectorOpen(false);
+  }
+  function updateKineticSettings(patch: Partial<KineticsMeasurementOptions>) {
+    if (patch.from !== undefined) setKinFrom(patch.from);
+    if (patch.to !== undefined) setKinTo(patch.to);
+    if (patch.mode !== undefined) setKinMode(patch.mode);
+    if (patch.standardFrom !== undefined) setStdFrom(patch.standardFrom);
+    if (patch.standardTo !== undefined) setStdTo(patch.standardTo);
+    if (patch.targetProtons !== undefined)
+      setTargetProtons(patch.targetProtons);
+    if (patch.standardProtons !== undefined)
+      setStdProtons(patch.standardProtons);
+    if (patch.standardConcentration !== undefined)
+      setStdConcentration(patch.standardConcentration);
+    if (patch.concentrationUnit !== undefined)
+      setConcentrationUnit(patch.concentrationUnit);
+    setFitEnabled(false);
+  }
   const kineticOptions = useMemo(
     () => ({
       from: kinFrom,
@@ -1784,9 +1832,7 @@ export default function App() {
       standardConcentration: stdConcentration,
       concentrationUnit,
       excludedIds: excluded,
-      spectrumIds:
-        activeStack?.spectrumIds ??
-        spectra.filter((s) => !s.twoD).map((s) => s.id),
+      spectrumIds: kineticSpectra.map((s) => s.id),
       nucleus: active?.nucleus,
     }),
     [
@@ -1800,8 +1846,7 @@ export default function App() {
       stdConcentration,
       concentrationUnit,
       excluded,
-      activeStack,
-      spectra,
+      kineticSpectra,
       active?.nucleus,
     ],
   );
@@ -1859,11 +1904,29 @@ export default function App() {
         else if (propertiesOpen) setPropertiesOpen(false);
         else if (contextMenu) setContextMenu(null);
         else if (help) setHelp(false);
-        else cancelPreview();
+        else if (kinPicking || tab === "Kinetics") {
+          setKinPicking(null);
+          setKinSettingsOpen(false);
+          setTool("select");
+        } else cancelPreview();
         return;
       }
-      if (busy || propertiesOpen || integralEdit) return;
+      if (busy || propertiesOpen || integralEdit || kinSettingsOpen) return;
       if (baselineOpen && k !== "b") return;
+      if (tab === "Kinetics" && !command && !e.altKey && !e.shiftKey) {
+        if (k === "i") {
+          e.preventDefault();
+          pickKineticRegion("target");
+          return;
+        }
+        if (k === "z") {
+          e.preventDefault();
+          setKinView("spectra");
+          setKinPicking(null);
+          setTool("zoom");
+          return;
+        }
+      }
       if (e.shiftKey && k === "p") {
         e.preventDefault();
         enterTab("Processing");
@@ -1964,6 +2027,9 @@ export default function App() {
     contextMenu,
     integralEdit,
     activeStack,
+    tab,
+    kinPicking,
+    kinSettingsOpen,
   ]);
   const processActions = (
     <>
@@ -2414,14 +2480,7 @@ export default function App() {
                 icon={BarChart3}
                 label="Measure region"
                 onClick={() => {
-                  setTool("integral");
-                  setPanel("integral");
-                  setTab("Analysis");
-                  setKinPicking(true);
-                  setInspectorOpen(false);
-                  notify(
-                    "Drag across the signal to measure it across the time series.",
-                  );
+                  pickKineticRegion("target");
                 }}
               />
               <span className="group-label">Time series</span>
@@ -2852,68 +2911,70 @@ export default function App() {
           />
         )}
         <main className="workspace">
-          <div className="workspace-toolbar">
-            <div className="breadcrumbs">
-              <span>{isDemo ? "Example project" : projectName}</span>
-              <ChevronRight size={12} />
-              <strong>
-                {activeStack
-                  ? `${activeStack.label} · ${active?.label}`
-                  : (active?.label ?? "No spectrum")}
-              </strong>
-            </div>
-            <div className="view-options">
-              {activeStack && (
+          {tab !== "Kinetics" && (
+            <div className="workspace-toolbar">
+              <div className="breadcrumbs">
+                <span>{isDemo ? "Example project" : projectName}</span>
+                <ChevronRight size={12} />
+                <strong>
+                  {activeStack
+                    ? `${activeStack.label} · ${active?.label}`
+                    : (active?.label ?? "No spectrum")}
+                </strong>
+              </div>
+              <div className="view-options">
+                {activeStack && (
+                  <select
+                    aria-label="Active stack member"
+                    value={active?.id}
+                    onChange={(e) =>
+                      selectSpectrum(e.target.value, false, false, true)
+                    }
+                  >
+                    {stackMembers.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.label}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <select
-                  aria-label="Active stack member"
-                  value={active?.id}
-                  onChange={(e) =>
-                    selectSpectrum(e.target.value, false, false, true)
-                  }
+                  disabled={!!active?.twoD}
+                  aria-label="Spectrum component"
+                  value={component}
+                  onChange={(e) => {
+                    const c = e.target.value as typeof component;
+                    if (c === "fid" && !active?.fid) {
+                      notify("This spectrum has no original FID.");
+                      return;
+                    }
+                    if (c === "imag" && !active?.data.imag) {
+                      notify("No imaginary component is available.");
+                      return;
+                    }
+                    setComponent(c);
+                  }}
                 >
-                  {stackMembers.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.label}
-                    </option>
-                  ))}
+                  <option value="real">
+                    {active?.twoD
+                      ? `${active.twoD.experiment} · ${active.twoD.mode} contours`
+                      : "Real spectrum"}
+                  </option>
+                  <option value="imag">Imaginary</option>
+                  <option value="magnitude">Magnitude</option>
+                  <option value="fid">FID</option>
                 </select>
-              )}
-              <select
-                disabled={!!active?.twoD}
-                aria-label="Spectrum component"
-                value={component}
-                onChange={(e) => {
-                  const c = e.target.value as typeof component;
-                  if (c === "fid" && !active?.fid) {
-                    notify("This spectrum has no original FID.");
-                    return;
-                  }
-                  if (c === "imag" && !active?.data.imag) {
-                    notify("No imaginary component is available.");
-                    return;
-                  }
-                  setComponent(c);
-                }}
-              >
-                <option value="real">
-                  {active?.twoD
-                    ? `${active.twoD.experiment} · ${active.twoD.mode} contours`
-                    : "Real spectrum"}
-                </option>
-                <option value="imag">Imaginary</option>
-                <option value="magnitude">Magnitude</option>
-                <option value="fid">FID</option>
-              </select>
-              <button
-                className={`icon-button ${grid ? "on" : ""}`}
-                title="Toggle grid"
-                aria-label="Toggle grid"
-                onClick={() => setGrid((v) => !v)}
-              >
-                <GripVertical size={16} />
-              </button>
+                <button
+                  className={`icon-button ${grid ? "on" : ""}`}
+                  title="Toggle grid"
+                  aria-label="Toggle grid"
+                  onClick={() => setGrid((v) => !v)}
+                >
+                  <GripVertical size={16} />
+                </button>
+              </div>
             </div>
-          </div>
+          )}
           {isDemo && (
             <div className="demo-banner">
               <span>
@@ -2926,303 +2987,181 @@ export default function App() {
             </div>
           )}
           {tab === "Kinetics" ? (
-            <div className="kinetics-workspace">
-              <div className="kinetics-heading">
-                <div>
-                  <span className="eyebrow">REACTION MONITORING</span>
-                  <h1>Kinetics</h1>
-                  <p>
-                    {activeStack
-                      ? `${activeStack.label} · ${stackMembers.length} spectra`
-                      : "Measure the same signal across your time series."}
-                  </p>
-                </div>
-                <button className="secondary" onClick={() => exportKinetics()}>
-                  <Download size={15} />
-                  Export data
-                </button>
-              </div>
-              <div className="kinetics-controls">
-                <NumberField
-                  label="Region from (ppm)"
-                  value={kinFrom}
-                  onChange={(n) => {
-                    setKinFrom(n);
-                    setFitEnabled(false);
-                  }}
-                  step={0.01}
-                />
-                <NumberField
-                  label="Region to (ppm)"
-                  value={kinTo}
-                  onChange={(n) => {
-                    setKinTo(n);
-                    setFitEnabled(false);
-                  }}
-                  step={0.01}
-                />
-                <Field label="Model">
-                  <select
-                    value={kinModel}
-                    onChange={(e) =>
-                      setKinModel(e.target.value as typeof kinModel)
+            <KineticsWorkspace
+              spectra={kineticSpectra}
+              stacks={stacks}
+              activeStackId={activeStackId}
+              activeId={activeId}
+              seriesLabel={
+                activeStack?.label ?? `All ${active?.nucleus ?? "1D"} spectra`
+              }
+              settings={kineticOptions}
+              onSettingsChange={updateKineticSettings}
+              onSeriesChange={(id) => {
+                const stack = stacks.find((s) => s.id === id);
+                setActiveStackId(stack?.id ?? null);
+                setSelectedStackId(stack?.id ?? null);
+                if (stack && !stack.spectrumIds.includes(activeId))
+                  setActiveId(stack.spectrumIds[0]);
+                setMode(stack ? "stack" : "single");
+                setKinPicking(null);
+                setFitEnabled(false);
+              }}
+              model={kinModel}
+              onModelChange={(model) => {
+                setKinModel(model);
+                setFitEnabled(false);
+              }}
+              measurements={kineticMeasurements}
+              points={kineticsPoints}
+              fit={fitResult.fit}
+              fitError={fitResult.error}
+              onFit={() => setFitEnabled(true)}
+              onExport={exportKinetics}
+              onTimeChange={(id, time) =>
+                setSpectra((all) =>
+                  all.map((s) =>
+                    s.id === id ? { ...s, timeMinutes: time } : s,
+                  ),
+                )
+              }
+              onIncludeChange={(id) =>
+                setExcluded((all) =>
+                  all.includes(id) ? all.filter((v) => v !== id) : [...all, id],
+                )
+              }
+              onSelect={(id) => selectSpectrum(id, false, false, !!activeStack)}
+              view={kinView}
+              onViewChange={setKinView}
+              settingsOpen={kinSettingsOpen}
+              onSettingsOpenChange={setKinSettingsOpen}
+              picking={kinPicking}
+              onPick={pickKineticRegion}
+              onCancelPick={() => {
+                setKinPicking(null);
+                setTool("select");
+              }}
+              spectrumTools={
+                <>
+                  <button
+                    title="Select (Esc)"
+                    aria-label="Select kinetic spectrum"
+                    className={tool === "select" ? "is-active" : ""}
+                    onClick={() => {
+                      setTool("select");
+                      setKinPicking(null);
+                    }}
+                  >
+                    <NmrToolIcon kind="select" size={18} />
+                  </button>
+                  <button
+                    title="Zoom (Z)"
+                    aria-label="Zoom kinetic spectra"
+                    className={tool === "zoom" ? "is-active" : ""}
+                    onClick={() => {
+                      setTool("zoom");
+                      setKinPicking(null);
+                    }}
+                  >
+                    <NmrToolIcon kind="zoom" size={18} />
+                  </button>
+                  <button
+                    title="Pan (Space + drag)"
+                    aria-label="Pan kinetic spectra"
+                    className={tool === "pan" ? "is-active" : ""}
+                    onClick={() => {
+                      setTool("pan");
+                      setKinPicking(null);
+                    }}
+                  >
+                    <NmrToolIcon kind="pan" size={18} />
+                  </button>
+                  <button
+                    title="Measure region (I)"
+                    aria-label="Measure kinetic region"
+                    className={kinPicking === "target" ? "is-active" : ""}
+                    onClick={() => pickKineticRegion("target")}
+                  >
+                    <NmrToolIcon kind="integral" size={18} />
+                  </button>
+                  <button
+                    title="Full spectrum"
+                    aria-label="Full kinetic spectra"
+                    onClick={full}
+                  >
+                    <NmrToolIcon kind="full" size={18} />
+                  </button>
+                </>
+              }
+              spectrum={
+                active && displayedActive && !active.twoD ? (
+                  <SpectrumPlot
+                    spectra={kineticSpectra.map((s) =>
+                      s.id === activeId ? displayedActive : s,
+                    )}
+                    active={displayedActive}
+                    view={view}
+                    mode="stack"
+                    normalization={normalization}
+                    tool={
+                      kinPicking
+                        ? "integral"
+                        : ["select", "zoom", "pan"].includes(tool)
+                          ? tool
+                          : "select"
                     }
-                  >
-                    <option value="decay">Exponential decay</option>
-                    <option value="growth">Exponential growth</option>
-                    <option value="linear">Linear</option>
-                  </select>
-                </Field>
-                <button className="primary" onClick={() => setFitEnabled(true)}>
-                  <Activity size={16} /> Fit curve
-                </button>
-              </div>
-              <div className="kinetics-controls internal-standard-controls">
-                <Field label="Comparison">
-                  <select
-                    value={kinMode}
-                    onChange={(e) => {
-                      setKinMode(e.target.value as typeof kinMode);
-                      setFitEnabled(false);
-                    }}
-                  >
-                    <option value="area">Raw signal area</option>
-                    <option value="ratio">Internal standard ratio</option>
-                    <option value="concentration">
-                      Internal standard concentration
-                    </option>
-                  </select>
-                </Field>
-                {kinMode !== "area" && (
-                  <>
-                    <NumberField
-                      label="Standard from (ppm)"
-                      value={stdFrom}
-                      onChange={setStdFrom}
-                      step={0.01}
-                    />
-                    <NumberField
-                      label="Standard to (ppm)"
-                      value={stdTo}
-                      onChange={setStdTo}
-                      step={0.01}
-                    />
-                    <NumberField
-                      label="Target proton count"
-                      value={targetProtons}
-                      min={1}
-                      onChange={(n) => setTargetProtons(Math.max(1, n))}
-                      step={1}
-                    />
-                    <NumberField
-                      label="Standard proton count"
-                      value={stdProtons}
-                      min={1}
-                      onChange={(n) => setStdProtons(Math.max(1, n))}
-                      step={1}
-                    />
-                  </>
-                )}
-                {kinMode === "concentration" && (
-                  <>
-                    <NumberField
-                      label="Standard concentration"
-                      value={stdConcentration}
-                      min={0.000001}
-                      onChange={(n) =>
-                        setStdConcentration(Math.max(0.000001, n))
-                      }
-                    />
-                    <Field label="Units">
-                      <select
-                        value={concentrationUnit}
-                        onChange={(e) => setConcentrationUnit(e.target.value)}
-                      >
-                        <option>mM</option>
-                        <option>M</option>
-                        <option>µM</option>
-                      </select>
-                    </Field>
-                  </>
-                )}
-              </div>
-              {activeStack && (
-                <Field label="Shared integral region">
-                  <select
-                    value=""
-                    onChange={(e) => {
-                      const i = active?.integrals.find(
-                        (i) => i.id === e.target.value,
-                      );
-                      if (i) {
-                        setKinFrom(i.from);
-                        setKinTo(i.to);
-                        setFitEnabled(false);
-                      }
-                    }}
-                  >
-                    <option value="">
-                      Choose an integral from this stack…
-                    </option>
-                    {active?.integrals.map((i) => (
-                      <option key={i.id} value={i.id}>
-                        {i.label} · {fmt(i.from)}–{fmt(i.to)} ppm
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-              )}
-              <KineticsChart
-                points={kineticsPoints}
-                fit={fitResult.fit}
-                label={
-                  kinMode === "area"
-                    ? "Integrated area"
-                    : kinMode === "ratio"
-                      ? "Internal standard ratio"
-                      : `Concentration (${concentrationUnit})`
-                }
-              />
-              {fitResult.error && (
-                <p className="inline-warning">{fitResult.error}</p>
-              )}
-              {fitResult.fit && (
-                <div className="fit-stats">
-                  <div>
-                    <small>R²</small>
-                    <strong>{fitResult.fit.rSquared.toFixed(5)}</strong>
+                    gain={plotGain}
+                    component="real"
+                    grid={grid}
+                    showPeaks={false}
+                    showIntegrals={false}
+                    onRegion={region}
+                    onPoint={() => {}}
+                    onCursor={setCursor}
+                    onZoom={zoom}
+                    onGain={gain}
+                    onSelect={(id) =>
+                      selectSpectrum(id, false, false, !!activeStack)
+                    }
+                    onDeselect={() => setSelected([])}
+                    selected={[]}
+                    properties={kineticProperties}
+                    baseline={null}
+                    handAlign={false}
+                    onShift={() => {}}
+                    selectedIntegral=""
+                    onIntegralSelect={() => {}}
+                    onIntegralEdit={() => {}}
+                    onIntegralResize={() => {}}
+                    onIntegralMenu={() => {}}
+                    onFit={full}
+                    exportRef={svgExport}
+                    regions={[
+                      {
+                        from: kinFrom,
+                        to: kinTo,
+                        color: "#1689e9",
+                        label: "Target",
+                      },
+                      ...(kinMode !== "area"
+                        ? [
+                            {
+                              from: stdFrom,
+                              to: stdTo,
+                              color: "#329771",
+                              label: "Standard",
+                            },
+                          ]
+                        : []),
+                    ]}
+                  />
+                ) : (
+                  <div className="kinetics-empty">
+                    <p>Open a 1D spectrum to view this time series.</p>
                   </div>
-                  <div>
-                    <small>RMSE</small>
-                    <strong>{fitResult.fit.rmse.toPrecision(4)}</strong>
-                  </div>
-                  {fitResult.fit.halfLife !== undefined && (
-                    <div>
-                      <small>Half-life</small>
-                      <strong>
-                        {fitResult.fit.halfLife.toFixed(2)} <span>min</span>
-                      </strong>
-                    </div>
-                  )}
-                  {Object.entries(fitResult.fit.parameters).map(
-                    ([key, value]) => (
-                      <div key={key}>
-                        <small>{key}</small>
-                        <strong>{value.toPrecision(4)}</strong>
-                      </div>
-                    ),
-                  )}
-                </div>
-              )}
-              <p className="kinetics-note">
-                Uses signed integrals of the processed real spectrum. Display
-                gain and stack normalization do not affect these values. A fit
-                describes the trend; quantitative concentration requires
-                acquisition calibration.
-              </p>
-              <div className="kinetics-table">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Include</th>
-                      <th>Spectrum</th>
-                      <th>Time (min)</th>
-                      <th>Target area</th>
-                      <th>Standard area</th>
-                      <th>
-                        {kinMode === "area"
-                          ? "Measurement"
-                          : kinMode === "ratio"
-                            ? "Ratio"
-                            : `Concentration (${concentrationUnit})`}
-                      </th>
-                      <th>Status</th>
-                      <th>Residual</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(activeStack
-                      ? stackMembers
-                      : spectra.filter(
-                          (s) => !s.twoD && s.nucleus === active?.nucleus,
-                        )
-                    ).map((s) => {
-                      const p = kineticsPoints.find((v) => v.id === s.id);
-                      const measurement = kineticMeasurements.find(
-                        (m) => m.id === s.id,
-                      );
-                      return (
-                        <tr key={s.id}>
-                          <td>
-                            <input
-                              type="checkbox"
-                              aria-label={`Include ${s.label} in fit`}
-                              disabled={!!measurement?.error}
-                              checked={
-                                !excluded.includes(s.id) && !measurement?.error
-                              }
-                              onChange={() =>
-                                setExcluded((a) =>
-                                  a.includes(s.id)
-                                    ? a.filter((v) => v !== s.id)
-                                    : [...a, s.id],
-                                )
-                              }
-                            />
-                          </td>
-                          <td>{s.label}</td>
-                          <td>
-                            <input
-                              type="number"
-                              aria-label={`Time for ${s.label}`}
-                              value={s.timeMinutes ?? ""}
-                              placeholder="Set time"
-                              step=".5"
-                              onChange={(e) => {
-                                const n = e.target.valueAsNumber;
-                                setSpectra((a) =>
-                                  a.map((v) =>
-                                    v.id === s.id
-                                      ? {
-                                          ...v,
-                                          timeMinutes: Number.isFinite(n)
-                                            ? n
-                                            : undefined,
-                                        }
-                                      : v,
-                                  ),
-                                );
-                              }}
-                            />
-                          </td>
-                          <td>
-                            {measurement?.targetArea?.toPrecision(6) ?? "—"}
-                          </td>
-                          <td>
-                            {measurement?.standardArea?.toPrecision(6) ?? "—"}
-                          </td>
-                          <td>{measurement?.value?.toPrecision(6) ?? "—"}</td>
-                          <td className="measurement-status">
-                            {measurement?.error ??
-                              (measurement?.included ? "Included" : "Excluded")}
-                          </td>
-                          <td>
-                            {fitResult.fit && p
-                              ? fmt(
-                                  fitResult.fit.residuals[
-                                    kineticsPoints.indexOf(p)
-                                  ],
-                                  5,
-                                )
-                              : "—"}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+                )
+              }
+            />
           ) : active && displayedActive ? (
             <div className="page-stage">
               <div

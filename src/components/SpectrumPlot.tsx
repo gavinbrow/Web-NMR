@@ -4,6 +4,7 @@ import { displayedIntegralValue } from "../features/integrals";
 import type { SpectrumProperties } from "../features/appearance";
 
 interface Props {
+  regions?: { from: number; to: number; color: string; label: string }[];
   spectra: Spectrum[];
   active: Spectrum;
   view: [number, number];
@@ -706,6 +707,40 @@ export function SpectrumPlot(p: Props) {
             <rect x={pad.l} y={pad.t} width={pw} height={ph} />
           </clipPath>
         </defs>
+        {p.regions && !isFid && (
+          <g clipPath="url(#plot-clip)" pointerEvents="none">
+            {p.regions.map((region) => {
+              const left = Math.min(xPixel(region.from), xPixel(region.to));
+              const width = Math.abs(xPixel(region.from) - xPixel(region.to));
+              return (
+                <g key={region.label}>
+                  <rect
+                    x={left}
+                    y={pad.t}
+                    width={width}
+                    height={ph}
+                    fill={region.color}
+                    fillOpacity={0.09}
+                  />
+                  <path
+                    d={`M${left},${pad.t}V${pad.t + ph}M${left + width},${pad.t}V${pad.t + ph}`}
+                    stroke={region.color}
+                    strokeOpacity={0.6}
+                    strokeDasharray="4 3"
+                  />
+                  <text
+                    x={left + 4}
+                    y={pad.t + ph - 8}
+                    fontSize={10}
+                    fill={region.color}
+                  >
+                    {region.label}
+                  </text>
+                </g>
+              );
+            })}
+          </g>
+        )}
         {p.grid && (
           <g
             className="grid"

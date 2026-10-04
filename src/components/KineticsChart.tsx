@@ -1,33 +1,63 @@
+import { useEffect, useId, useRef, useState } from "react";
 import type { KineticPoint, KineticFit } from "../model";
+
+const tick = (n: number) =>
+  n === 0
+    ? "0"
+    : Math.abs(n) < 0.001 || Math.abs(n) >= 10000
+      ? n.toExponential(2)
+      : Number(n.toPrecision(4)).toString();
+
 export function KineticsChart({
   points,
   fit,
   label = "Integrated area",
+  onSelect,
+  activeId,
 }: {
   points: KineticPoint[];
   fit: KineticFit | null;
   label?: string;
+  onSelect?: (id: string) => void;
+  activeId?: string;
 }) {
-  const w = 700,
-    h = 300,
-    pad = { l: 65, r: 25, t: 26, b: 44 };
-  const xs = points.map((p) => p.time),
-    ys = points.map((p) => p.value);
+  const host = useRef<HTMLDivElement>(null);
+  const clip = useId().replace(/:/g, "");
+  const [size, setSize] = useState({ w: 700, h: 350 });
+  useEffect(() => {
+    if (!host.current) return;
+    const observer = new ResizeObserver((entries) => {
+      const { width, height } = entries[0].contentRect;
+      setSize({ w: Math.max(260, width), h: Math.max(120, height) });
+    });
+    observer.observe(host.current);
+    return () => observer.disconnect();
+  }, []);
+  const { w, h } = size;
+  const pad = { l: w < 450 ? 76 : 88, r: 28, t: 14, b: 47 };
+  const valid = points.filter(
+    (p) => Number.isFinite(p.time) && Number.isFinite(p.value),
+  );
+  const xs = valid.map((p) => p.time),
+    ys = valid.map((p) => p.value);
   const minX = Math.min(0, ...xs),
-    maxX = Math.max(1, ...xs),
-    minY = Math.min(0, ...ys),
-    maxY = Math.max(1e-12, ...ys) * 1.1;
+    maxX = Math.max(minX + 1, ...xs);
+  const bottom = Math.min(0, ...ys),
+    top = Math.max(0, ...ys);
+  const span = top - bottom || Math.max(Math.abs(top), 1);
+  const minY = bottom < 0 ? bottom - span * 0.08 : 0;
+  const maxY = top + span * 0.1;
   const x = (v: number) =>
-      pad.l + ((v - minX) / (maxX - minX)) * (w - pad.l - pad.r),
-    y = (v: number) =>
-      h - pad.b - ((v - minY) / (maxY - minY)) * (h - pad.t - pad.b);
-  const curve: number[][] = [];
+    pad.l + ((v - minX) / (maxX - minX)) * (w - pad.l - pad.r);
+  const y = (v: number) =>
+    h - pad.b - ((v - minY) / (maxY - minY)) * (h - pad.t - pad.b);
+  const curve: [number, number][] = [];
   if (fit) {
-    for (let i = 0; i <= 100; i++) {
-      const t = minX + ((maxX - minX) * i) / 100;
+    for (let i = 0; i <= 200; i++) {
+      const t = minX + ((maxX - minX) * i) / 200;
       const p = fit.parameters,
         dt = t - (p.timeOrigin ?? 0);
-      const v =
+      const value =
         fit.model === "linear"
           ? (p.intercept ?? 0) + (p.slope ?? 0) * t
           : fit.model === "decay"
@@ -35,92 +65,130 @@ export function KineticsChart({
               (p.amplitude ?? 0) * Math.exp(-(p.rate ?? 0) * dt)
             : (p.offset ?? 0) +
               (p.amplitude ?? 0) * (1 - Math.exp(-(p.rate ?? 0) * dt));
-      curve.push([x(t), y(v)]);
+      if (Number.isFinite(value)) curve.push([x(t), y(value)]);
     }
   }
   return (
-    <svg
-      viewBox={`0 0 ${w} ${h}`}
-      className="kinetics-chart"
-      role="img"
-      aria-label="Integrated signal against time with fitted curve"
-    >
-      <rect width={w} height={h} fill="white" />
-      {[0, 0.25, 0.5, 0.75, 1].map((n) => (
-        <g key={n}>
-          <line
-            x1={pad.l}
-            x2={w - pad.r}
-            y1={y(minY + (maxY - minY) * n)}
-            y2={y(minY + (maxY - minY) * n)}
-            stroke="#e6e8ec"
-          />
-          <text
-            x={pad.l - 10}
-            y={y(minY + (maxY - minY) * n) + 4}
-            textAnchor="end"
-            fontSize="10"
-            fill="#66717a"
-          >
-            {(minY + (maxY - minY) * n).toPrecision(3)}
-          </text>
-          <text
-            x={x(minX + (maxX - minX) * n)}
-            y={h - 23}
-            textAnchor="middle"
-            fontSize="10"
-            fill="#66717a"
-          >
-            {(minX + (maxX - minX) * n).toFixed(1)}
-          </text>
+    <div ref={host} className="kinetics-chart-host">
+      <svg
+        viewBox={`0 0 ${w} ${h}`}
+        className="kinetics-chart"
+        role="img"
+        aria-label={`${label} against time${fit ? " with fitted curve" : ""}`}
+      >
+        <rect width={w} height={h} fill="white" />
+        <defs>
+          <clipPath id={clip}>
+            <rect
+              x={pad.l - 7}
+              y={pad.t - 7}
+              width={w - pad.l - pad.r + 14}
+              height={h - pad.t - pad.b + 14}
+            />
+          </clipPath>
+        </defs>
+        {[0, 0.25, 0.5, 0.75, 1].map((n) => (
+          <g key={n}>
+            <line
+              x1={pad.l}
+              x2={w - pad.r}
+              y1={y(minY + (maxY - minY) * n)}
+              y2={y(minY + (maxY - minY) * n)}
+              stroke="#e8ecf2"
+            />
+            <text
+              x={pad.l - 10}
+              y={y(minY + (maxY - minY) * n) + 4}
+              textAnchor="end"
+              fontSize={11}
+              fill="#788499"
+            >
+              {tick(minY + (maxY - minY) * n)}
+            </text>
+            <text
+              x={x(minX + (maxX - minX) * n)}
+              y={h - 26}
+              textAnchor="middle"
+              fontSize={11}
+              fill="#788499"
+            >
+              {tick(minX + (maxX - minX) * n)}
+            </text>
+          </g>
+        ))}
+        <g clipPath={`url(#${clip})`}>
+          {fit && (
+            <path
+              d={curve
+                .map(([a, b], i) => `${i ? "L" : "M"}${a},${b}`)
+                .join(" ")}
+              stroke="#1689e9"
+              strokeWidth={2}
+              fill="none"
+            />
+          )}
+          {valid.map((p) => (
+            <g
+              key={p.id}
+              className="kinetics-observation"
+              role={onSelect ? "button" : undefined}
+              tabIndex={onSelect ? 0 : undefined}
+              aria-label={`Time ${tick(p.time)} minutes, ${label} ${tick(p.value)}${p.included ? "" : ", excluded"}`}
+              onClick={() => onSelect?.(p.id)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onSelect?.(p.id);
+                }
+              }}
+            >
+              <title>{`${tick(p.time)} min · ${tick(p.value)}${p.included ? "" : " · excluded from fit"}`}</title>
+              {p.id === activeId && (
+                <circle
+                  cx={x(p.time)}
+                  cy={y(p.value)}
+                  r={8}
+                  fill="none"
+                  stroke="#a73249"
+                  strokeOpacity={0.45}
+                />
+              )}
+              <circle
+                cx={x(p.time)}
+                cy={y(p.value)}
+                r={4.5}
+                fill={p.included ? "#a73249" : "#b9c1cd"}
+                stroke="white"
+                strokeWidth={1.5}
+              />
+            </g>
+          ))}
         </g>
-      ))}
-      {fit && (
-        <path
-          d={curve.map(([a, b], i) => `${i ? "L" : "M"}${a},${b}`).join(" ")}
-          stroke="#a73249"
-          strokeWidth="2"
-          fill="none"
+        <line
+          x1={pad.l}
+          x2={w - pad.r}
+          y1={h - pad.b}
+          y2={h - pad.b}
+          stroke="#aab4c2"
         />
-      )}
-      {points.map((p) => (
-        <circle
-          key={p.id}
-          cx={x(p.time)}
-          cy={y(p.value)}
-          r="4.5"
-          fill={p.included ? "#a73249" : "#c1c5cb"}
-          stroke="white"
-          strokeWidth="1.5"
-        />
-      ))}
-      <line
-        x1={pad.l}
-        x2={w - pad.r}
-        y1={h - pad.b}
-        y2={h - pad.b}
-        stroke="#a6adb4"
-      />
-      <text
-        x={w / 2}
-        y={h - 5}
-        textAnchor="middle"
-        fontSize="11"
-        fill="#505a65"
-      >
-        Time (min)
-      </text>
-      <text
-        transform={`translate(14,${h / 2}) rotate(-90)`}
-        textAnchor="middle"
-        fontSize="11"
-        fill="#505a65"
-      >
-        {label}
-      </text>
-      <text x={pad.l} y="15" fontSize="11" fill="#505a65">
-        Signal measurement · display gain excluded
-      </text>
-    </svg>
+        <text
+          x={(pad.l + w - pad.r) / 2}
+          y={h - 8}
+          textAnchor="middle"
+          fontSize={12}
+          fill="#526075"
+        >
+          Time (min)
+        </text>
+        <text
+          transform={`translate(17,${(pad.t + h - pad.b) / 2}) rotate(-90)`}
+          textAnchor="middle"
+          fontSize={11}
+          fill="#526075"
+        >
+          {label}
+        </text>
+      </svg>
+    </div>
   );
 }
