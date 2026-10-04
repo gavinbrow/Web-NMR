@@ -86,6 +86,30 @@ describe("integral reporting calibration", () => {
     ]);
     expect(s.integrals.map((i) => i.area)).toEqual([320_000, 640_000, 480_000]);
   });
+  it("keeps the Mnova unit reference fixed when it is not the first region", () => {
+    const s = spectrum([100, 200]);
+    s.integrals = s.integrals.map((i, n) => ({
+      ...i,
+      imported: {
+        source: "Mnova",
+        normalizedValue: [0.594, 1][n],
+        rawArea: [594, 1000][n],
+        referenceArea: 1000,
+      },
+    }));
+    const withNew = recalibrateIntegrals(s, [
+      ...s.integrals,
+      { id: "new", label: "New", from: 0, to: -1, area: 150 },
+    ]);
+    expect(displayedIntegralValue(withNew, withNew.integrals[2])).toBe(0.75);
+    const processed = recalibrateIntegrals(
+      s,
+      s.integrals.map((i, n) => ({ ...i, area: [110, 180][n] })),
+    );
+    expect(processed.integralCalibration).toEqual({ anchorId: "i1", target: 1 });
+    expect(displayedIntegralValue(processed, processed.integrals[1])).toBe(1);
+    expect(displayedIntegralValue(processed, processed.integrals[0])).toBeCloseTo(110 / 180);
+  });
   it("exports the actual relative reporting factor and recalibrated explicit factor", () => {
     const s = spectrum([100, 200]);
     expect(analysisCSV(s, "integrals")).toContain("100,1,0.01");

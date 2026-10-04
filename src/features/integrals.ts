@@ -13,6 +13,23 @@ function naturalAnchor(integrals: Integral[]): Integral | undefined {
     integrals.find((i) => nonzeroArea(integrals, i.area))
   );
 }
+function importedAnchor(
+  integrals: Integral[],
+  retained = integrals,
+): Integral | undefined {
+  const candidates = integrals.filter(
+    (i) =>
+      i.imported &&
+      i.imported.normalizedValue > 0 &&
+      nonzeroArea(integrals, i.area) &&
+      retained.some((a) => a.id === i.id),
+  );
+  // Prefer the saved unit reference over whichever region appears first.
+  return (
+    candidates.find((i) => Math.abs(i.imported!.normalizedValue - 1) < 1e-12) ??
+    candidates[0]
+  );
+}
 /** Uncalibrated reporting uses a relative first integral. Raw signed areas stay unchanged. */
 export function integralReportingScale(s: Spectrum): number {
   if (s.integralCalibration) {
@@ -23,9 +40,9 @@ export function integralReportingScale(s: Spectrum): number {
       return s.integralCalibration.target / anchor.area;
   } else if (Number.isFinite(s.integralScale) && s.integralScale !== 1)
     return s.integralScale;
-  const saved = s.integrals.find(
-    (i) => i.imported && nonzeroArea(s.integrals, i.area),
-  );
+  const saved =
+    importedAnchor(s.integrals) ??
+    s.integrals.find((i) => i.imported && nonzeroArea(s.integrals, i.area));
   if (saved) return saved.imported!.normalizedValue / saved.area;
   const anchor = naturalAnchor(s.integrals);
   return anchor ? 1 / Math.abs(anchor.area) : 0;
@@ -56,13 +73,7 @@ export function recalibrateIntegrals(
     // Mnova's saved Sum convention is preserved exactly on opening. Once the
     // signal or limits change, measure the corrected browser trace and retain
     // the existing reference target, rather than freezing old measurements.
-    const saved = s.integrals.find(
-      (i) =>
-        i.imported &&
-        i.imported.normalizedValue > 0 &&
-        nonzeroArea(s.integrals, i.area) &&
-        updated.some((a) => a.id === i.id),
-    );
+    const saved = importedAnchor(s.integrals, updated);
     if (!calibration && saved)
       calibration = {
         anchorId: saved.id,
