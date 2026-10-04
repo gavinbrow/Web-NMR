@@ -4,6 +4,7 @@ import {
   decodeNativeDocumentFrame,
   decodeNativeStackDisplay,
   decodeNativeTextReports,
+  decodeNativePages,
 } from "./mnovaNativeDocument";
 
 function authoredAxis(type: number, name: string, from: number, to: number) {
@@ -68,10 +69,89 @@ it("requires consecutive full Qt axes and restores exact range plus Qt RGB color
     decodeNativeDocumentFrame(truncated, 0, truncated.length),
   ).toBeUndefined();
 });
+
+it("decodes authored page names and multiple canvas-item membership without treating datasets as pages", () => {
+  const concat = (...parts: Uint8Array[]) => {
+    const b = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+    let at = 0;
+    for (const p of parts) {
+      b.set(p, at);
+      at += p.length;
+    }
+    return b;
+  };
+  const u32 = (n: number) => {
+    const b = new Uint8Array(4);
+    new DataView(b.buffer).setUint32(0, n);
+    return b;
+  };
+  const block = (b: Uint8Array) => concat(u32(b.length), b);
+  const empty = () => block(new Uint8Array());
+  const text = (s: string) => {
+    const b = new Uint8Array(s.length * 2);
+    const v = new DataView(b.buffer);
+    for (let i = 0; i < s.length; i++) v.setUint16(i * 2, s.charCodeAt(i));
+    return block(b);
+  };
+  const item = (rtti: number, payload: number) =>
+    concat(
+      empty(),
+      block(
+        concat(u32(rtti), new Uint8Array(16), Uint8Array.of(payload, 9, 8)),
+      ),
+    );
+  const page = (title: string, notes: string, items: Uint8Array[]) => {
+    const d = block(concat(empty(), empty()));
+    const c = block(concat(d, text(notes)));
+    const b = block(concat(c, text(title)));
+    const modern = block(concat(b, empty()));
+    const list = concat(
+      empty(),
+      block(concat(u32(items.length), block(concat(...items)))),
+    );
+    const legacy = block(
+      concat(
+        block(new Uint8Array(40)),
+        block(new Uint8Array(32)),
+        new Uint8Array(16),
+        list,
+      ),
+    );
+    return concat(modern, legacy);
+  };
+  const first = page("Owned page α", "Saved notes\r\nSecond line", [
+    item(109, 123),
+    item(107, 124),
+  ]);
+  const second = page("", "", [item(109, 125)]);
+  const bytes = concat(
+    Uint8Array.of(222, 111, 33),
+    empty(),
+    block(concat(u32(2), block(concat(first, second)))),
+  );
+  const offsets = [bytes.indexOf(123), bytes.indexOf(125)];
+  const result = decodeNativePages(bytes, offsets);
+  expect(result).toHaveLength(2);
+  expect(result?.[0].title).toBe("Owned page α");
+  expect(result?.[0].notes).toBe("Saved notes\nSecond line");
+  expect(result?.map((p) => p.pageIndex)).toEqual([1, 2]);
+  expect(result?.map((p) => p.items.length)).toEqual([2, 1]);
+  expect(result?.[0].items.map((i) => i.nmrOffsets)).toEqual([
+    [offsets[0]],
+    [],
+  ]);
+  expect(result?.[1].items[0].nmrOffsets).toEqual([offsets[1]]);
+  expect(result?.[0].to).toBe(result?.[1].from);
+  expect(decodeNativePages(bytes.slice(0, -1), offsets)).toBeUndefined();
+  expect(decodeNativePages(bytes, [1])).toBeUndefined();
+  const corrupt = bytes.slice();
+  new DataView(corrupt.buffer).setUint32(11, 3);
+  expect(decodeNativePages(corrupt, offsets)).toBeUndefined();
+});
 it("restores bounded stack order and hidden entries independently of storage order", () => {
   // Three authored members, one hidden. Lengths copied from the verified collection framing.
   const values = [
-    52, 40, 20, 8, 0, 2, 1, 1, 3, 2, 0, 1, 0, 0, 3, 2, 0, 1, 0, 0, 3, 0, 1, 2,
+    52, 40, 20, 8, 0, 0, 1, 1, 3, 2, 0, 1, 0, 2, 3, 2, 0, 1, 0, 0, 3, 0, 1, 2,
     0,
   ];
   const b = new Uint8Array(83 + values.length * 4);
@@ -97,6 +177,25 @@ describe("external native document framing", () => {
         hidden: [],
         selected: 0,
       });
+      expect(decodeNativeStackDisplay(b, 6050534, 6400000, 7)?.selected).toBe(
+        0,
+      );
+      expect(
+        decodeNativeStackDisplay(b, 10532996, 10800000, 13)?.selected,
+      ).toBe(11);
+      const offsets = [
+        379256, 845043, 1294107, 1738381, 2180693, 2624936, 3065187, 3505166,
+        3943965, 4382852, 4814995, 5242861, 5678955, 6050534, 8514780, 10532996,
+      ];
+      const pages = decodeNativePages(b, offsets);
+      expect(pages).toHaveLength(16);
+      expect(pages?.every((p) => p.title === "" && p.notes === "")).toBe(true);
+      expect(pages?.map((p) => p.items.length)).toEqual([
+        1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1,
+      ]);
+      expect(
+        pages?.flatMap((p) => p.items.flatMap((i) => i.nmrOffsets)),
+      ).toEqual(offsets);
       const reports = decodeNativeTextReports(b);
       expect(reports).toHaveLength(2);
       expect(reports[0].offset).toBe(1204670);

@@ -158,7 +158,7 @@ function parseSpectrum(
     }
   }
   metadata.title =
-    metadata.Title ?? pageTitle.split("\n")[0] ?? "Mnova spectrum";
+    metadata.Title || pageTitle.split("\n")[0] || "Mnova spectrum";
   metadata.comments = metadata.Comment ?? "";
   if (spec.processing && typeof spec.processing === "object")
     metadata.mnovaProcessing = JSON.stringify(spec.processing).slice(
@@ -241,6 +241,7 @@ export function importMnovaJson(
     base: string,
     pageTitle = "",
     item?: Record<string, any>,
+    pageIndex?: number,
   ) => {
     const dataset = record(value);
     if (
@@ -263,6 +264,7 @@ export function importMnovaJson(
           pageTitle,
           warnings,
         );
+        if (pageIndex !== undefined) s.metadata.mnovaPageIndex = pageIndex;
         added.push(s);
         sourceIndices.set(sourceIndex, s);
         spectra.push(s);
@@ -301,7 +303,10 @@ export function importMnovaJson(
         id: uid(),
         label: pageTitle.split("\n")[0] || "Mnova stack",
         spectrumIds: members.map((s) => s.id),
-        referenceId: members[0].id,
+        referenceId:
+          members.find(
+            (s) => s.id === sourceIndices.get(item.stack.active_element)?.id,
+          )?.id ?? members[0].id,
       };
       stacks.push(stack);
       members.forEach((s) => {
@@ -329,7 +334,7 @@ export function importMnovaJson(
     )
       throw new Error("Unsupported Mnova JSON document schema.");
     const visited = new Set<string>();
-    for (const pageId of doc.pages) {
+    for (const [pageIndex, pageId] of doc.pages.entries()) {
       const id = safePath(
         typeof pageId === "string" ? pageId.replace(/^\{|\}$/g, "") : pageId,
       );
@@ -352,6 +357,7 @@ export function importMnovaJson(
           path,
           shortText(page.title),
           item,
+          pageIndex + 1,
         );
       }
     }

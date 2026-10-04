@@ -4,6 +4,8 @@ import { importMnovaNative, setNativeCodecForTests } from "./mnovaNative";
 import { unzipSync } from "fflate";
 import { importMnovaJson } from "./mnovaJson";
 import { encodeProject, decodeProject } from "../features/project";
+import { navigatorEntries } from "../features/navigator";
+import { spectrumText } from "../features/spectrumText";
 const example = new URL(
   "../../../Example Files/400 GB-DAC1_GPC_Time_trials_08-11-26.6.fid.mnova",
   import.meta.url,
@@ -20,7 +22,7 @@ beforeAll(() =>
 );
 describe("native Mnova local reference verification", () => {
   it.skipIf(!existsSync(example) || !existsSync(converted))(
-    "matches every saved sample and exact calibration in the external 38-spectrum reference",
+    "restores 16 document pages while matching all 38 stored member spectra in the independent reference",
     async () => {
       const result = await importMnovaNative(
         buf(readFileSync(example)),
@@ -30,9 +32,20 @@ describe("native Mnova local reference verification", () => {
         files = new Map(Object.entries(zip).map(([k, v]) => [k, buf(v)]));
       const expected = importMnovaJson(files, "root.json");
       expect(result.spectra).toHaveLength(38);
+      expect(
+        navigatorEntries(result.spectra, result.stacks ?? []),
+      ).toHaveLength(16);
       expect(result.stacks?.map((s) => s.spectrumIds.length)).toEqual(
         expected.stacks?.map((s) => s.spectrumIds.length),
       );
+      expect(
+        result.stacks?.map((st) => st.spectrumIds.indexOf(st.referenceId!)),
+      ).toEqual([0, 0, 11]);
+      expect(result.stacks?.map((st) => st.label)).toEqual([
+        "400 GB-DAC1_GPC_Time_trials_08-11-26.6.fid",
+        "400 GB-DAC1_GPC_Time_trials_08-11-26.8.fid",
+        "400 GB-DAC1_GPC_Time_trials_08-11-26.11.fid",
+      ]);
       expect(result.spectra[0].savedView).toEqual([
         8.440252831970579, 3.341754477624404,
       ]);
@@ -55,6 +68,9 @@ describe("native Mnova local reference verification", () => {
           e = expected.spectra[i];
         expect(s.label).toBe(e.label);
         expect(s.metadata.comment).toBe(e.metadata.Comment);
+        expect(spectrumText(s).title).toBe(e.label);
+        expect(spectrumText(s).comments).toBe(e.metadata.Comment);
+        expect(spectrumText(s).comments.trim()).not.toBe("");
         expect(s.frequencyMHz).toBe(e.frequencyMHz);
         expect(s.nucleus).toBe(e.nucleus);
         expect(s.data.x).toEqual(e.data.x);

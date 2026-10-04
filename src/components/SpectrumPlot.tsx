@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useMemo } from "react";
 import type { Spectrum, Tool, ComplexData } from "../model";
 import { displayedIntegralValue } from "../features/integrals";
 import type { SpectrumProperties } from "../features/appearance";
+import { spectrumText } from "../features/spectrumText";
 import { snapReferencePeak } from "../features/reference";
 
 interface Props {
@@ -998,17 +999,9 @@ export function SpectrumPlot(p: Props) {
               fill={a.titleColor}
               fontFamily={a.titleFont}
             >
-              <tspan>
-                {a.titleText ||
-                  String(p.active.metadata.title || p.active.label)}
-              </tspan>
-              {String(
-                p.active.metadata.comments ||
-                  p.active.metadata.COMMENT ||
-                  p.active.metadata.COMMENTS ||
-                  "",
-              )
-                .split(/\r?\n/)
+              <tspan>{a.titleText || spectrumText(p.active).title}</tspan>
+              {spectrumText(p.active)
+                .comments.split(/\r?\n/)
                 .filter(Boolean)
                 .map((line, index) => (
                   <tspan

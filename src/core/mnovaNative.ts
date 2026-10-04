@@ -9,6 +9,7 @@ import {
 } from "./mnovaNativeAnalysis";
 import {
   decodeNativeDocumentFrame,
+  decodeNativePages,
   decodeNativeStackDisplay,
   decodeNativeTextReports,
 } from "./mnovaNativeDocument";
@@ -386,9 +387,19 @@ export async function importMnovaNative(
     stacks: SpectrumStack[] = [],
     warnings: string[] = [];
   const textReports = decodeNativeTextReports(b);
+  const pages = decodeNativePages(b, items);
+  const pageMembership = new Map(
+    pages?.flatMap((page) =>
+      page.items.flatMap((item) =>
+        item.nmrOffsets.map((offset) => [offset, { page, item }] as const),
+      ),
+    ),
+  );
   for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
-    const from = items[itemIndex],
-      to = items[itemIndex + 1] ?? b.length,
+    const from = items[itemIndex];
+    const membership = pageMembership.get(from);
+    const page = membership?.page;
+    const to = membership?.item.to ?? items[itemIndex + 1] ?? b.length,
       records: ArrayRecord[] = [];
     for (let p = from; p < to - essentialSignature.length; p++)
       if (matches(b, p, essentialSignature)) {
@@ -466,8 +477,9 @@ export async function importMnovaNative(
       recipe.window = "none";
       recipe.pivotPpm = (x[0] + x[x.length - 1]) / 2;
       const metadata: Record<string, string | number> = {
-        title: title || `${label} ${spectra.length + 1}`,
+        title: title || page?.title || `${label} ${spectra.length + 1}`,
         comment,
+        comments: comment,
         Title: title,
         Comment: comment,
         processingSource:
@@ -476,6 +488,13 @@ export async function importMnovaNative(
         mnovaSavedPhase0Radians: d.phase0,
         mnovaSavedPhase1Radians: d.phase1,
         mnovaNativeItem: itemIndex + 1,
+        ...(page
+          ? {
+              mnovaPageIndex: page.pageIndex,
+              mnovaPageId: page.pageId,
+              mnovaPageNotes: page.notes,
+            }
+          : {}),
       };
       const spectrum: Spectrum = {
         id: uid(),
@@ -628,7 +647,13 @@ export async function importMnovaNative(
       spectra.push(spectrum);
       members.push(spectrum);
     }
-    const reports = textReports.filter((r) => r.offset > from && r.offset < to);
+    const isFirstPageItem =
+      !page || page.items.flatMap((item) => item.nmrOffsets)[0] === from;
+    const reports = isFirstPageItem
+      ? textReports.filter(
+          (r) => r.offset > (page?.from ?? from) && r.offset < (page?.to ?? to),
+        )
+      : [];
     if (reports.length && members.length) {
       const metadata = members[0].metadata;
       metadata.mnovaReportText = reports.map((r) => r.text).join("\n\n");
@@ -650,10 +675,17 @@ export async function importMnovaNative(
         members[j].metadata.mnovaDisplayOrder = stackDisplay.order.indexOf(j);
       }
     }
+    const selectedMember = members[stackDisplay?.selected ?? 0];
+    const pageTitle =
+      page?.title ||
+      [selectedMember.label, selectedMember.metadata.comments]
+        .filter(Boolean)
+        .join("\n");
+    members.forEach((s) => (s.metadata.mnovaPageTitle = pageTitle));
     if (members.length > 1) {
       const stack = {
         id: uid(),
-        label: `Mnova stack ${stacks.length + 1}`,
+        label: page?.title.split("\n")[0] || selectedMember.label,
         spectrumIds: (stackDisplay?.order ?? members.map((_, i) => i)).map(
           (i) => members[i].id,
         ),

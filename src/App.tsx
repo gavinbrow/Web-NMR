@@ -73,6 +73,8 @@ import {
   analyzeMultiplet,
   autoMultiplets,
 } from "./core/numerics";
+import { navigatorEntries } from "./features/navigator";
+import { spectrumDescription } from "./features/spectrumText";
 import { suitableTraceSources } from "./features/twoDTraces";
 import { ReferenceDialog } from "./components/ReferenceDialog";
 import { snapReferencePeak } from "./features/reference";
@@ -615,6 +617,7 @@ export default function App() {
     [warnings, setWarnings] = useState<string[]>([]),
     [dragOver, setDragOver] = useState(false),
     [cursor, setCursor] = useState<number | null>(null);
+  const [expandedStacks, setExpandedStacks] = useState<string[]>([]);
   const [originalMnova, setOriginalMnova] =
       useState<Project["originalMnova"]>(),
     [mnovaDetailsOpen, setMnovaDetailsOpen] = useState(false);
@@ -1340,9 +1343,9 @@ export default function App() {
     setBaselineOpen(false);
     baselineJob.current++;
     if (range) {
-      const ids = spectra
-        .filter((s) => s.label.toLowerCase().includes(filter.toLowerCase()))
-        .map((s) => s.id);
+      const ids = navigatorEntries(spectra, stacks, filter).flatMap((entry) =>
+        entry.kind === "spectrum" ? [entry.spectrum.id] : [],
+      );
       const a = ids.indexOf(selectionAnchor.current || activeId),
         b = ids.indexOf(id);
       setSelected(a < 0 ? [id] : ids.slice(Math.min(a, b), Math.max(a, b) + 1));
@@ -1389,6 +1392,7 @@ export default function App() {
   }
   function restoreProjectState(p: Project) {
     setOriginalMnova(p.originalMnova);
+    setExpandedStacks([]);
     restoreKinetics(p.kinetics);
     setSpectra(p.spectra);
     setStacks(p.stacks ?? []);
@@ -1410,7 +1414,7 @@ export default function App() {
     setReady(true);
     notify(
       p.originalMnova
-        ? `Opened ${p.name} · ${p.spectra.length} spectra · ${p.spectra.reduce((n, s) => n + s.integrals.length, 0)} integrals`
+        ? `Opened ${p.name} · ${navigatorEntries(p.spectra, p.stacks ?? []).length} pages · ${p.spectra.reduce((n, s) => n + s.integrals.length, 0)} integrals`
         : `Opened ${p.name}`,
     );
   }
@@ -2247,7 +2251,11 @@ export default function App() {
     setBaselineOpen(false);
     setActiveStackId(st.id);
     setSelectedStackId(st.id);
-    setActiveId(st.spectrumIds[0]);
+    const referenceId =
+      st.referenceId && st.spectrumIds.includes(st.referenceId)
+        ? st.referenceId
+        : st.spectrumIds[0];
+    setActiveId(referenceId);
     setSelected([]);
     setMode("stack");
     setTab("Stack");
@@ -2257,7 +2265,7 @@ export default function App() {
     setPreview(null);
     setFitEnabled(false);
     setHandAlign(false);
-    const s = spectra.find((s) => s.id === st.spectrumIds[0]);
+    const s = spectra.find((s) => s.id === referenceId);
     if (s) setView(s.savedView ?? extent(s.data, s.referenceOffset));
   }
   function shiftMember(id: string, delta: number) {
@@ -3156,8 +3164,12 @@ export default function App() {
       component: settings?.component ?? ("real" as const),
     };
   }
-  const visibleSpectra = spectra.filter((s) =>
-    s.label.toLowerCase().includes(filter.toLowerCase()),
+  const pages = navigatorEntries(spectra, stacks);
+  const visibleEntries = navigatorEntries(spectra, stacks, filter);
+  const hasMnovaPages = spectra.some(
+    (s) =>
+      typeof s.metadata.mnovaNativeItem === "number" ||
+      typeof s.metadata.mnovaPageIndex === "number",
   );
   void historyVersion;
   return (
@@ -3662,7 +3674,11 @@ export default function App() {
               Example series · Open data
             </button>
           )}
-          <span>{spectra.length} spectra</span>
+          <span>
+            {hasMnovaPages
+              ? `${pages.length} pages`
+              : `${spectra.length} spectra`}
+          </span>
           <button
             className="icon-button"
             title="Toggle inspector"
@@ -3724,135 +3740,203 @@ export default function App() {
                 }
               }}
             >
-              {stacks.map((st) => (
-                <div
-                  key={st.id}
-                  className={`spectrum-card stack-card ${selectedStackId === st.id ? "multi-selected" : ""}`}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    if (busy) return;
-                    openStack(st);
-                    setContextMenu({ x: e.clientX, y: e.clientY });
-                  }}
-                >
-                  <button
-                    className="spectrum-select"
-                    onClick={() => openStack(st)}
-                  >
-                    <div className="card-caption">
-                      <Layers size={14} />
-                      <span>{st.label}</span>
-                    </div>
-                    <div className="stack-thumbnail">
-                      {st.spectrumIds.slice(0, 4).map((id) => {
-                        const sp = spectra.find((s) => s.id === id);
-                        return sp ? (
-                          <MiniTrace
-                            key={id}
-                            spectrum={
-                              sp.id === active?.id ? displayedActive! : sp
-                            }
-                            {...miniView(sp, activeStackId === st.id)}
-                          />
-                        ) : null;
-                      })}
-                    </div>
-                    <div className="card-meta">
-                      <span>NMR stack</span>
-                      <span>{st.spectrumIds.length} spectra</span>
-                    </div>
-                  </button>
-                  <div className="card-actions">
-                    <button
-                      className="icon-button"
-                      aria-label={`Remove ${st.label}`}
-                      onClick={() => {
-                        commit(
-                          spectra,
-                          stacks.filter((s) => s.id !== st.id),
-                        );
-                        if (activeStackId === st.id) {
-                          setActiveStackId(null);
-                          setSelectedStackId(null);
-                          setMode("single");
-                        }
+              {visibleEntries.map((entry, i) => {
+                if (entry.kind === "stack") {
+                  const st = entry.stack;
+                  const stackReference =
+                    spectra.find((s) => s.id === st.referenceId) ??
+                    spectra.find((s) => s.id === st.spectrumIds[0]);
+                  return (
+                    <div
+                      key={st.id}
+                      className={`spectrum-card stack-card ${selectedStackId === st.id ? "multi-selected" : ""}`}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        if (busy) return;
+                        openStack(st);
+                        setContextMenu({ x: e.clientX, y: e.clientY });
                       }}
                     >
-                      <X size={12} />
-                    </button>
-                  </div>
-                </div>
-              ))}
-              {visibleSpectra.map((s, i) => (
-                <div
-                  key={s.id}
-                  className={`spectrum-card ${selected.includes(s.id) ? "multi-selected" : ""}`}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    if (busy) return;
-                    selectSpectrum(s.id);
-                    setContextMenu({ x: e.clientX, y: e.clientY });
-                  }}
-                >
-                  <button
-                    className="spectrum-select"
-                    title="Click to select; Shift-click for a range; Ctrl/Cmd-click to toggle"
-                    onClick={(e) =>
-                      selectSpectrum(s.id, e.ctrlKey || e.metaKey, e.shiftKey)
-                    }
-                  >
-                    <div className="card-caption">
-                      <span
-                        className="trace-dot"
-                        style={{ background: s.color }}
-                      />
-                      <span>
-                        {i + 1}. {s.label}
-                      </span>
-                    </div>
-                    <div className="thumbnail">
-                      {s.twoD ? (
-                        <MiniTwoD spectrum={s} spectra={spectra} />
-                      ) : (
-                        <MiniTrace
-                          spectrum={s.id === active?.id ? displayedActive! : s}
-                          {...miniView(s)}
-                        />
+                      <button
+                        className="spectrum-select"
+                        title={
+                          stackReference
+                            ? spectrumDescription(stackReference)
+                            : st.label
+                        }
+                        onClick={() => openStack(st)}
+                      >
+                        <div className="card-caption">
+                          <Layers size={14} />
+                          <span title={st.label}>
+                            {i + 1}. {st.label}
+                          </span>
+                        </div>
+                        <div className="stack-thumbnail">
+                          {st.spectrumIds.slice(0, 4).map((id) => {
+                            const sp = spectra.find((s) => s.id === id);
+                            return sp ? (
+                              <MiniTrace
+                                key={id}
+                                spectrum={
+                                  sp.id === active?.id ? displayedActive! : sp
+                                }
+                                {...miniView(sp, activeStackId === st.id)}
+                              />
+                            ) : null;
+                          })}
+                        </div>
+                        <div className="card-meta">
+                          <span>NMR stack</span>
+                          <span>{st.spectrumIds.length} spectra</span>
+                        </div>
+                      </button>
+                      {entry.imported && expandedStacks.includes(st.id) && (
+                        <div className="stack-member-list">
+                          {st.spectrumIds.map((id) => {
+                            const member = spectra.find((s) => s.id === id);
+                            if (!member) return null;
+                            return (
+                              <button
+                                key={id}
+                                className={
+                                  activeStackId === st.id && activeId === id
+                                    ? "stack-member active"
+                                    : "stack-member"
+                                }
+                                title={spectrumDescription(member)}
+                                onClick={() => {
+                                  openStack(st);
+                                  selectSpectrum(id, false, false, true);
+                                }}
+                              >
+                                <span
+                                  className="trace-dot"
+                                  style={{ background: member.color }}
+                                />
+                                <span>{member.label}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
                       )}
+                      <div className="card-actions">
+                        {entry.imported && (
+                          <button
+                            className="stack-members-toggle"
+                            aria-label={`${expandedStacks.includes(st.id) ? "Hide" : "Show"} stack members for ${st.label}`}
+                            aria-expanded={expandedStacks.includes(st.id)}
+                            onClick={() =>
+                              setExpandedStacks((ids) =>
+                                ids.includes(st.id)
+                                  ? ids.filter((id) => id !== st.id)
+                                  : [...ids, st.id],
+                              )
+                            }
+                          >
+                            {expandedStacks.includes(st.id) ? (
+                              <ChevronDown size={12} />
+                            ) : (
+                              <ChevronRight size={12} />
+                            )}
+                            Members
+                          </button>
+                        )}
+                        <button
+                          className="icon-button"
+                          aria-label={`Remove ${st.label}`}
+                          onClick={() => {
+                            commit(
+                              spectra,
+                              stacks.filter((s) => s.id !== st.id),
+                            );
+                            if (activeStackId === st.id) {
+                              setActiveStackId(null);
+                              setSelectedStackId(null);
+                              setMode("single");
+                            }
+                          }}
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
                     </div>
-                    <div className="card-meta">
-                      <span>{s.nucleus}</span>
-                      <span>
-                        {s.timeMinutes === undefined
-                          ? s.sourceFormat
-                          : `${s.timeMinutes} min`}
-                      </span>
-                    </div>
-                  </button>
-                  <div className="card-actions">
+                  );
+                }
+                const s = entry.spectrum;
+                return (
+                  <div
+                    key={s.id}
+                    className={`spectrum-card ${selected.includes(s.id) ? "multi-selected" : ""}`}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      if (busy) return;
+                      selectSpectrum(s.id);
+                      setContextMenu({ x: e.clientX, y: e.clientY });
+                    }}
+                  >
                     <button
-                      className="icon-button"
-                      aria-label={`${s.visible ? "Hide" : "Show"} ${s.label}`}
-                      onClick={() =>
-                        setSpectra((a) =>
-                          a.map((v) =>
-                            v.id === s.id ? { ...v, visible: !v.visible } : v,
-                          ),
-                        )
+                      className="spectrum-select"
+                      title={`${spectrumDescription(s)}\nClick to select; Shift-click for a range; Ctrl/Cmd-click to toggle`}
+                      onClick={(e) =>
+                        selectSpectrum(s.id, e.ctrlKey || e.metaKey, e.shiftKey)
                       }
                     >
-                      {s.visible ? <Eye size={13} /> : <EyeOff size={13} />}
+                      <div className="card-caption">
+                        <span
+                          className="trace-dot"
+                          style={{ background: s.color }}
+                        />
+                        <span>
+                          {i + 1}. {s.label}
+                        </span>
+                      </div>
+                      <div className="thumbnail">
+                        {s.twoD ? (
+                          <MiniTwoD spectrum={s} spectra={spectra} />
+                        ) : (
+                          <MiniTrace
+                            spectrum={
+                              s.id === active?.id ? displayedActive! : s
+                            }
+                            {...miniView(s)}
+                          />
+                        )}
+                      </div>
+                      <div className="card-meta">
+                        <span>{s.nucleus}</span>
+                        <span>
+                          {s.timeMinutes === undefined
+                            ? s.sourceFormat
+                            : `${s.timeMinutes} min`}
+                        </span>
+                      </div>
                     </button>
-                    <button
-                      className="icon-button"
-                      aria-label={`Remove ${s.label}`}
-                      onClick={() => deleteSpectrum(s.id)}
-                    >
-                      <X size={12} />
-                    </button>
+                    <div className="card-actions">
+                      <button
+                        className="icon-button"
+                        aria-label={`${s.visible ? "Hide" : "Show"} ${s.label}`}
+                        onClick={() =>
+                          setSpectra((a) =>
+                            a.map((v) =>
+                              v.id === s.id ? { ...v, visible: !v.visible } : v,
+                            ),
+                          )
+                        }
+                      >
+                        {s.visible ? <Eye size={13} /> : <EyeOff size={13} />}
+                      </button>
+                      <button
+                        className="icon-button"
+                        aria-label={`Remove ${s.label}`}
+                        onClick={() => deleteSpectrum(s.id)}
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}{" "}
             </div>
             <div className="navigator-footer">
               <button
@@ -5749,7 +5833,9 @@ export default function App() {
             </div>
             <p>{originalMnova.name}</p>
             <dl className="kv">
-              <dt>Spectra</dt>
+              <dt>Document pages</dt>
+              <dd>{pages.length}</dd>
+              <dt>Stored spectra (including stack members)</dt>
               <dd>{spectra.length}</dd>
               <dt>Integral regions</dt>
               <dd>{spectra.reduce((n, s) => n + s.integrals.length, 0)}</dd>
@@ -5817,10 +5903,13 @@ export default function App() {
               </b>{" "}
               ·{" "}
               {recovery.documents.reduce(
-                (sum, d) => sum + d.project.spectra.length,
+                (sum, d) =>
+                  sum +
+                  navigatorEntries(d.project.spectra, d.project.stacks ?? [])
+                    .length,
                 0,
               )}{" "}
-              spectra
+              views
               <br />
               Last saved {new Date(recovery.savedAt).toLocaleString()}
             </p>
@@ -5831,7 +5920,13 @@ export default function App() {
                   <div>
                     <strong>{d.project.name}</strong>
                     <span>
-                      {d.project.spectra.length} spectra
+                      {
+                        navigatorEntries(
+                          d.project.spectra,
+                          d.project.stacks ?? [],
+                        ).length
+                      }{" "}
+                      views
                       {recovery.closedDocuments.some((c) => c.id === d.id)
                         ? " · recently closed"
                         : ""}

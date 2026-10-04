@@ -2471,3 +2471,38 @@ a {
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
+
+.stack-members-toggle {
+  margin-right: auto;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: #bdc8d8;
+}
+.stack-member-list {
+  padding: 4px 7px;
+  border-top: 1px solid #535762;
+  max-height: 240px;
+  overflow: auto;
+}
+.stack-member {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 4px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  text-align: left;
+  font-size: 10px;
+}
+.stack-member > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stack-member.active {
+  border-color: #ec536c;
+  background: #40363f;
+}

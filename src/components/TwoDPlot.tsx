@@ -13,6 +13,7 @@ import {
   reconcileTraceSources,
 } from "../features/twoDTraces";
 import "./TwoDPlot.css";
+import { spectrumText } from "../features/spectrumText";
 import { snapTwoDPeak } from "../core/twoDProcessing";
 interface Props {
   spectrum: Spectrum;
@@ -587,9 +588,9 @@ export function TwoDPlot({
             fontSize={a.titleSize}
             fill={a.titleColor}
           >
-            <tspan>{a.titleText || String(s.metadata.title || s.label)}</tspan>
-            {String(s.metadata.comments || "")
-              .split(/\r?\n/)
+            <tspan>{a.titleText || spectrumText(s).title}</tspan>
+            {spectrumText(s)
+              .comments.split(/\r?\n/)
               .filter(Boolean)
               .map((line, i) => (
                 <tspan

@@ -1,5 +1,143 @@
 import { NativeReader, nativeMatches } from "./mnovaNativeReader";
 
+export interface NativePageFrame {
+  pageIndex: number;
+  pageId: string;
+  title: string;
+  notes: string;
+  from: number;
+  to: number;
+  items: {
+    from: number;
+    to: number;
+    rtti: number;
+    pluginId: string;
+    nmrOffsets: number[];
+  }[];
+}
+function nativeUuid(r: NativeReader): string {
+  r.need(16);
+  const hex = Array.from(r.bytes.subarray(r.at, r.at + 16), (b) =>
+    b.toString(16).padStart(2, "0"),
+  ).join("");
+  r.at += 16;
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+function nextBlock(r: NativeReader): NativeReader {
+  const child = r.block();
+  r.at = child.end;
+  return child;
+}
+function exactEnd(r: NativeReader) {
+  if (r.at !== r.end) throw Error("Mnova page frame endpoint mismatch.");
+}
+/** Modern TPage/Utils::Page serialization; require the complete collection and known NMR item membership. */
+export function decodeNativePages(
+  bytes: Uint8Array,
+  nmrOffsets: number[],
+): NativePageFrame[] | undefined {
+  if (
+    !nmrOffsets.length ||
+    nmrOffsets.some((p) => !Number.isInteger(p) || p < 0 || p >= bytes.length)
+  )
+    return;
+  const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const first = Math.min(...nmrOffsets);
+  // The page-list location varies with document history. Candidate recognition is cheap;
+  // acceptance requires all page/item endpoints, counts and supplied NMR positions.
+  for (let at = 0; at + 16 <= first; at++) {
+    if (v.getUint32(at, false) !== 0) continue;
+    const length = v.getUint32(at + 4, false),
+      count = v.getUint32(at + 8, false);
+    if (
+      count < 1 ||
+      count > 512 ||
+      length < 8 ||
+      at + 8 + length > bytes.length ||
+      v.getUint32(at + 12, false) !== length - 8
+    )
+      continue;
+    try {
+      const list = new NativeReader(bytes, at + 12, at + 8 + length);
+      const pages = nextBlock(list);
+      exactEnd(list);
+      const result: NativePageFrame[] = [];
+      for (let i = 0; i < count; i++) {
+        const from = pages.at;
+        const modern = nextBlock(pages),
+          b = nextBlock(modern),
+          c = nextBlock(b),
+          d = nextBlock(c);
+        const compatibility = nextBlock(d);
+        exactEnd(compatibility); // Empty modern compatibility frame.
+        nextBlock(d); // Bounded page history, unrelated to canvas membership.
+        exactEnd(d);
+        const notes = c.text();
+        exactEnd(c);
+        const title = b.text();
+        exactEnd(b);
+        nextBlock(modern); // TPageLayout frame.
+        exactEnd(modern);
+        const legacy = nextBlock(pages),
+          oldPaper = nextBlock(legacy),
+          rectangles = nextBlock(legacy);
+        if (
+          oldPaper.end - oldPaper.at !== 40 ||
+          rectangles.end - rectangles.at !== 32
+        )
+          throw Error("Unrecognized Mnova page geometry.");
+        const pageId = nativeUuid(legacy);
+        exactEnd(nextBlock(legacy));
+        const members = nextBlock(legacy),
+          itemCount = members.u32();
+        if (itemCount > 4096)
+          throw Error("Mnova canvas item count exceeds bounds.");
+        const itemList = nextBlock(members);
+        exactEnd(members);
+        const items: NativePageFrame["items"] = [];
+        for (let j = 0; j < itemCount; j++) {
+          const itemFrom = itemList.at;
+          exactEnd(nextBlock(itemList));
+          const item = nextBlock(itemList),
+            rtti = item.u32(),
+            pluginId = nativeUuid(item);
+          if (rtti > 1_000_000) throw Error("Invalid Mnova canvas item type.");
+          items.push({
+            from: itemFrom,
+            to: item.end,
+            rtti,
+            pluginId,
+            nmrOffsets: nmrOffsets.filter((p) => p >= item.at && p < item.end),
+          });
+        }
+        exactEnd(itemList);
+        exactEnd(legacy);
+        result.push({
+          pageIndex: i + 1,
+          pageId,
+          title,
+          notes,
+          from,
+          to: pages.at,
+          items,
+        });
+      }
+      exactEnd(pages);
+      const recognized = result.flatMap((p) =>
+        p.items.flatMap((item) => item.nmrOffsets),
+      );
+      if (
+        recognized.length !== nmrOffsets.length ||
+        !nmrOffsets.every((p) => recognized.includes(p))
+      )
+        continue;
+      return result;
+    } catch {
+      // A candidate inside an unrelated Qt object cannot pass the complete page-list framing.
+    }
+  }
+}
+
 const axisFrames = Uint8Array.from([
   0, 0, 0, 24, 0, 0, 0, 19, 0, 0, 0, 11, 0, 0, 0, 5, 0, 0, 0, 0,
 ]);
@@ -150,14 +288,14 @@ export function decodeNativeStackDisplay(
       throw Error("Native stack collection is outside the supported range.");
     return Array.from({ length: n }, () => r.u32());
   };
-  const selected = r.u32();
+  r.u32(); // Independent compatibility scalar (+0x88), not the active member.
   if (r.at !== start + 12 + 4 + lengths[3]) return;
   const hidden = list();
   if (r.at !== start + 8 + 4 + lengths[2]) return;
   const order = list();
   if (r.at !== start + 4 + 4 + lengths[1]) return;
   list();
-  r.u32();
+  const selected = r.u32(); // TStackedSpectra current/active member (+0x2c).
   if (r.at !== start + 4 + lengths[0]) return;
   const legacyOrder = list();
   r.u32();
