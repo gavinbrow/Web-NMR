@@ -110,6 +110,7 @@ function validateTwoD(data: TwoDSpectrum): void {
       text(data.experiment) &&
       [
         "Bruker processed 2D",
+        "Mnova native processed 2D",
         "Bruker raw 2D magnitude",
         "Bruker raw 2D absorption",
       ].includes(data.source) &&

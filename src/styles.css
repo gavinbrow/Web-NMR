@@ -2284,9 +2284,7 @@ a {
     crosshair;
 }
 .spectrum-plot.tool-reference {
-  cursor:
-    url("/cursors/reference.svg") 4 4,
-    crosshair;
+  cursor: default;
 }
 .spectrum-plot.tool-baseline {
   cursor:
@@ -2386,6 +2384,90 @@ a {
   }
 }
 
-.kinetics-demo-note {display:flex;gap:5px;align-items:center;font-size:10px;color:#cfa9b7;white-space:nowrap;padding:4px 6px;}
-.documentbar {min-width:0;}.documentbar .project-tabs-bar {flex:1;min-width:0;}
-@media(max-width:900px){.kinetics-demo-note{font-size:0;}.kinetics-demo-note svg{width:13px;height:13px;}}
+.kinetics-demo-note {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  font-size: 10px;
+  color: #cfa9b7;
+  white-space: nowrap;
+  padding: 4px 6px;
+}
+.documentbar {
+  min-width: 0;
+}
+.documentbar .project-tabs-bar {
+  flex: 1;
+  min-width: 0;
+}
+@media (max-width: 900px) {
+  .kinetics-demo-note {
+    font-size: 0;
+  }
+  .kinetics-demo-note svg {
+    width: 13px;
+    height: 13px;
+  }
+}
+
+.recovery-projects {
+  border: 1px solid #424954;
+  border-radius: 6px;
+  max-height: 300px;
+  overflow: auto;
+  margin: 12px 0;
+}
+.recovery-project {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  align-items: center;
+  border-bottom: 1px solid #3d444f;
+}
+.recovery-project:last-child {
+  border-bottom: 0;
+}
+.recovery-project > svg {
+  color: #aab4c3;
+  flex-shrink: 0;
+}
+.recovery-project > div {
+  flex: 1;
+  min-width: 0;
+}
+.recovery-project strong {
+  display: block;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.recovery-project span {
+  display: block;
+  font-size: 11px;
+  color: #9da8b9;
+  margin-top: 3px;
+}
+.recovery-project button:hover {
+  color: #ffadb9;
+  background: #6b2c3d;
+}
+.recovery-delete-all {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #d6a0ab;
+  margin: 14px auto 0;
+}
+.reference-marker {
+  stroke: #cc263f;
+  stroke-width: 1.3;
+  fill: none;
+  pointer-events: none;
+}
+.reference-marker text {
+  fill: #cc263f;
+  stroke: none;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}

@@ -1,4 +1,4 @@
-import { get, set, del } from "idb-keyval";
+import { get, update } from "idb-keyval";
 import { uid, type Project } from "../model";
 import { defaultProperties } from "./appearance";
 import { validateProject, loadRecovery, clearRecovery } from "./project";
@@ -17,6 +17,8 @@ export interface WorkspaceDocuments {
   /** Recently closed documents can be reopened without a save confirmation. */
   closedDocuments: WorkspaceDocument[];
   savedAt: string;
+  /** Retained in local recovery so an older browser tab cannot resurrect deleted projects. */
+  deletedDocumentIds?: string[];
 }
 export const WORKSPACE_RECOVERY_KEY = "web-nmr-workspace-recovery-v1";
 export const MAX_OPEN_DOCUMENTS = 24;
@@ -155,6 +157,49 @@ export function reopenDocument(
   const document = w.closedDocuments.find((d) => d.id === id);
   return document ? addDocument(w, document) : w;
 }
+export function deleteWorkspaceDocument(
+  w: WorkspaceDocuments,
+  id: string,
+): WorkspaceDocuments {
+  const index = w.documents.findIndex((d) => d.id === id);
+  const documents = w.documents.filter((d) => d.id !== id);
+  if (!documents.length)
+    documents.push(createWorkspaceDocument(createBlankProject()));
+  return stamp({
+    ...w,
+    documents,
+    closedDocuments: w.closedDocuments.filter((d) => d.id !== id),
+    activeDocumentId: documents.some((d) => d.id === w.activeDocumentId)
+      ? w.activeDocumentId
+      : documents[Math.max(0, Math.min(index, documents.length - 1))].id,
+    deletedDocumentIds: [...new Set([...(w.deletedDocumentIds ?? []), id])],
+  });
+}
+/** A blank replacement tab is never offered as a project to recover. */
+export function hasWorkspaceRecovery(w: WorkspaceDocuments): boolean {
+  return [...w.documents, ...w.closedDocuments].some(
+    (d) =>
+      d.project.spectra.length > 0 || d.project.name !== "Untitled project",
+  );
+}
+function filterDeleted(
+  w: WorkspaceDocuments,
+  deleted: string[],
+): WorkspaceDocuments {
+  const removed = new Set(deleted);
+  const documents = w.documents.filter((d) => !removed.has(d.id));
+  if (!documents.length)
+    documents.push(createWorkspaceDocument(createBlankProject()));
+  return {
+    ...w,
+    documents,
+    closedDocuments: w.closedDocuments.filter((d) => !removed.has(d.id)),
+    activeDocumentId: documents.some((d) => d.id === w.activeDocumentId)
+      ? w.activeDocumentId
+      : documents[0].id,
+    deletedDocumentIds: deleted,
+  };
+}
 export function validateWorkspaceDocuments(
   value: unknown,
 ): asserts value is WorkspaceDocuments {
@@ -172,6 +217,14 @@ export function validateWorkspaceDocuments(
   )
     throw new Error("Invalid saved workspace.");
   const ids = new Set<string>();
+  if (
+    w.deletedDocumentIds !== undefined &&
+    (!Array.isArray(w.deletedDocumentIds) ||
+      w.deletedDocumentIds.some(
+        (id) => typeof id !== "string" || !id || id.length > 128,
+      ))
+  )
+    throw new Error("Invalid deleted project identities.");
   for (const d of [...w.documents, ...w.closedDocuments]) {
     if (
       !d ||
@@ -198,7 +251,16 @@ export function saveWorkspaceRecovery(
   const write = recoveryWrites.then(async () => {
     try {
       validateWorkspaceDocuments(workspace);
-      await set(WORKSPACE_RECOVERY_KEY, workspace);
+      // IndexedDB's atomic update also serializes this merge across browser tabs.
+      await update<WorkspaceDocuments>(WORKSPACE_RECOVERY_KEY, (previous) => {
+        const deleted = [
+          ...new Set([
+            ...(previous?.deletedDocumentIds ?? []),
+            ...(workspace.deletedDocumentIds ?? []),
+          ]),
+        ];
+        return filterDeleted(workspace, deleted);
+      });
       await clearRecovery();
       return true;
     } catch {
@@ -215,7 +277,8 @@ export async function loadWorkspaceRecovery(): Promise<WorkspaceDocuments | null
     const value = await get<unknown>(WORKSPACE_RECOVERY_KEY);
     if (value) {
       validateWorkspaceDocuments(value);
-      return value;
+      const filtered = filterDeleted(value, value.deletedDocumentIds ?? []);
+      return hasWorkspaceRecovery(filtered) ? filtered : null;
     }
     const legacy = await loadRecovery();
     if (!legacy) return null;
@@ -229,7 +292,17 @@ export async function loadWorkspaceRecovery(): Promise<WorkspaceDocuments | null
 export async function clearWorkspaceRecovery(): Promise<void> {
   const clear = recoveryWrites.then(async () => {
     try {
-      await del(WORKSPACE_RECOVERY_KEY);
+      // Starting with the example clears spectra but keeps deletion identities.
+      // A separate, older browser tab must never restore a project already deleted.
+      await update<WorkspaceDocuments | undefined>(
+        WORKSPACE_RECOVERY_KEY,
+        (previous) => {
+          const deleted = previous?.deletedDocumentIds ?? [];
+          return deleted.length
+            ? filterDeleted(createWorkspace(), deleted)
+            : undefined;
+        },
+      );
       await clearRecovery();
     } catch {
       /* Storage may be unavailable. */

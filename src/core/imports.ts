@@ -770,7 +770,7 @@ export function importEntries(input: ImportEntry[]): ImportResult {
   for (const path of files.keys()) {
     if (/\.mnova$/i.test(path))
       warnings.push(
-        `${basename(path)}: native .mnova is a proprietary binary format. In Mnova 17 or later, use File → Save As → MestReNova JSON Document (.mnjs), then open that file here. This preserves stored processed traces and available raw FIDs. Older Mnova versions can export JCAMP-DX or ppm/intensity CSV.`,
+        `${basename(path)}: native .mnova decoding requires the asynchronous browser importer.`,
       );
     else if (/\.jdf$/i.test(path))
       warnings.push(
@@ -788,4 +788,32 @@ export function importEntries(input: ImportEntry[]): ImportResult {
     ...(importedView ? { view: importedView } : {}),
     ...(importedName ? { projectName: importedName } : {}),
   };
+}
+
+/** Native compressed arrays need a lazy WASM decoder; all other formats retain the synchronous parser. */
+export async function importEntriesAsync(
+  entries: ImportEntry[],
+): Promise<ImportResult> {
+  const native = entries.filter((e) => /\.mnova$/i.test(e.path));
+  if (!native.length) return importEntries(entries);
+  const remaining = entries.filter((e) => !/\.mnova$/i.test(e.path));
+  const result: ImportResult = remaining.length
+    ? importEntries(remaining)
+    : { spectra: [], warnings: [] };
+  const { importMnovaNative } = await import("./mnovaNative");
+  for (const entry of native) {
+    try {
+      const opened = await importMnovaNative(entry.data, basename(entry.path));
+      result.spectra.push(...opened.spectra);
+      result.warnings.push(...opened.warnings);
+      result.stacks = [...(result.stacks ?? []), ...(opened.stacks ?? [])];
+      result.projectName ??= opened.projectName;
+      result.view ??= opened.view;
+    } catch (error) {
+      result.warnings.push(
+        `${basename(entry.path)}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  return result;
 }

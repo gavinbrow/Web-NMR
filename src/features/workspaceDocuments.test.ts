@@ -12,6 +12,8 @@ import {
   captureDocument,
   clearWorkspaceRecovery,
   closeDocument,
+  deleteWorkspaceDocument,
+  hasWorkspaceRecovery,
   createBlankProject,
   createWorkspace,
   createWorkspaceDocument,
@@ -43,6 +45,20 @@ vi.mock("idb-keyval", () => ({
   },
   del: async (key: string) => {
     storage.entries.delete(key);
+  },
+  update: async (key: string, updater: (old: unknown) => unknown) => {
+    storage.activeWrites++;
+    storage.maxWrites = Math.max(storage.maxWrites, storage.activeWrites);
+    try {
+      await Promise.resolve();
+      if (storage.failSet) throw new Error("Quota exceeded");
+      storage.entries.set(
+        key,
+        structuredClone(updater(structuredClone(storage.entries.get(key)))),
+      );
+    } finally {
+      storage.activeWrites--;
+    }
   },
 }));
 function populated(name: string) {
@@ -144,6 +160,28 @@ describe("project document tabs", () => {
   });
 });
 describe("workspace recovery", () => {
+  it("permanently deletes individual and closed projects, and ignores later stale autosaves", async () => {
+    let w = createWorkspace(populated("A"), { id: "a" });
+    w = addDocument(w, createWorkspaceDocument(populated("B"), { id: "b" }));
+    const stale = w;
+    w = closeDocument(w, "a");
+    w = deleteWorkspaceDocument(w, "a");
+    expect(w.closedDocuments).toHaveLength(0);
+    expect(await saveWorkspaceRecovery(w)).toBe(true);
+    expect(await saveWorkspaceRecovery(stale)).toBe(true);
+    const recovered = (await loadWorkspaceRecovery())!;
+    expect(recovered.documents.map((d) => d.id)).toEqual(["b"]);
+    expect(recovered.deletedDocumentIds).toContain("a");
+    const empty = deleteWorkspaceDocument(recovered, "b");
+    expect(hasWorkspaceRecovery(empty)).toBe(false);
+    expect(await saveWorkspaceRecovery(empty)).toBe(true);
+    expect(await loadWorkspaceRecovery()).toBeNull();
+    await saveWorkspaceRecovery(stale);
+    expect(await loadWorkspaceRecovery()).toBeNull();
+    await clearWorkspaceRecovery();
+    await saveWorkspaceRecovery(stale);
+    expect(await loadWorkspaceRecovery()).toBeNull();
+  });
   it("round-trips all open and closed projects, typed arrays and opaque editor sessions", async () => {
     let w = createWorkspace(populated("A"), {
       id: "a",
@@ -156,7 +194,7 @@ describe("workspace recovery", () => {
     w = closeDocument(w, "a");
     expect(await saveWorkspaceRecovery(w)).toBe(true);
     const recovered = await loadWorkspaceRecovery();
-    expect(recovered).toEqual(w);
+    expect(recovered).toEqual({ ...w, deletedDocumentIds: [] });
     expect(recovered!.documents[0].project.spectra[0].data.real).toBeInstanceOf(
       Float64Array,
     );

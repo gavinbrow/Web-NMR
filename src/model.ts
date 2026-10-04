@@ -125,6 +125,7 @@ export interface TwoDSpectrum {
   experiment: string;
   source:
     | "Bruker processed 2D"
+    | "Mnova native processed 2D"
     | "Bruker raw 2D magnitude"
     | "Bruker raw 2D absorption";
   mode: "absorption" | "magnitude";

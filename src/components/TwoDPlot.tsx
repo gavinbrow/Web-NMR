@@ -27,6 +27,7 @@ interface Props {
   onViewChange?: (view: TwoDView) => void;
   onImport1D?: () => void;
   onReference?: (x: number, y: number) => void;
+  referencePoint?: { x: number; y: number };
   onBaselinePoint?: (x: number, y: number, value: number) => void;
   baselinePoints?: { xPpm: number; yPpm: number; value: number }[];
 }
@@ -63,6 +64,7 @@ export function TwoDPlot({
   onViewChange,
   onImport1D,
   onReference,
+  referencePoint,
   onBaselinePoint,
   baselinePoints,
 }: Props) {
@@ -400,10 +402,10 @@ export function TwoDPlot({
             ((xView[0] - xView[1]) * 8) / w,
             ((yView[0] - yView[1]) * 8) / h,
           ]);
-          if (peak) {
-            onReference?.(peak.xPpm, peak.yPpm);
-            setCursor({ x: px(peak.xPpm), y: py(peak.yPpm) });
-          }
+          const x = peak?.xPpm ?? atX(p.x),
+            y = peak?.yPpm ?? atY(p.y);
+          onReference?.(x, y);
+          setCursor({ x: px(x), y: py(y) });
           return;
         }
         if (tool === "baseline" && !space.current) {
@@ -639,12 +641,36 @@ export function TwoDPlot({
             F1 ({m.nucleusF1}, ppm)
           </text>
         </g>
-        {cursor && (
+        {tool !== "reference" && cursor && (
           <g data-ui="true" className="crosshair">
             <line x1={cursor.x} x2={cursor.x} y1={top} y2={top + h} />
             <line x1={left} x2={left + w} y1={cursor.y} y2={cursor.y} />
           </g>
         )}
+        {tool === "reference" &&
+          (referencePoint || cursor) &&
+          (() => {
+            const point = referencePoint
+              ? { x: px(referencePoint.x), y: py(referencePoint.y) }
+              : cursor!;
+            return (
+              <g
+                data-ui="true"
+                className="reference-marker"
+                data-testid="reference-marker-2d"
+              >
+                <line x1={point.x} x2={point.x} y1={top} y2={top + h} />
+                <line x1={left} x2={left + w} y1={point.y} y2={point.y} />
+                <circle cx={point.x} cy={point.y} r={8} />
+                <text
+                  x={Math.min(left + w - 105, point.x + 12)}
+                  y={Math.max(top + 13, point.y - 12)}
+                >
+                  {atX(point.x).toFixed(4)} · {atY(point.y).toFixed(4)}
+                </text>
+              </g>
+            );
+          })()}
         {baselinePoints?.map((p, i) => (
           <circle
             key={i}

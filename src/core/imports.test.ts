@@ -301,13 +301,13 @@ describe("source-aware imports", () => {
     expect(r.spectra[0].fid).toBeUndefined();
     expect(r.warnings.join(" ")).toContain("stored processed trace retained");
   });
-  it("provides an accurate native .mnova conversion message", () => {
+  it("directs native .mnova calls to the asynchronous reader", () => {
     const r = importEntries([
       { path: "example.mnova", data: text("Mestrelab Research S.L.") },
     ]);
     expect(r.spectra).toHaveLength(0);
     expect(r.warnings.join(" ")).toContain("native .mnova");
-    expect(r.warnings.join(" ")).toContain(".mnjs");
+    expect(r.warnings.join(" ")).toContain("asynchronous browser importer");
   });
   it.skipIf(
     !existsSync(

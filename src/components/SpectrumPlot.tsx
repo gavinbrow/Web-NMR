@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useMemo } from "react";
 import type { Spectrum, Tool, ComplexData } from "../model";
 import { displayedIntegralValue } from "../features/integrals";
 import type { SpectrumProperties } from "../features/appearance";
+import { snapReferencePeak } from "../features/reference";
 
 interface Props {
   regions?: {
@@ -20,6 +21,7 @@ interface Props {
   mode: "single" | "stack" | "overlay";
   normalization: "none" | "maximum" | "area";
   tool: Tool;
+  referencePpm?: number | null;
   gain: number;
   component: "real" | "imag" | "magnitude" | "fid";
   grid: boolean;
@@ -153,6 +155,15 @@ export function SpectrumPlot(p: Props) {
       };
     } | null>(null);
   const space = useRef(false);
+  const [referenceCursor, setReferenceCursor] = useState<{
+    ppm: number;
+    x: number;
+    y: number;
+    snapped: boolean;
+  } | null>(null);
+  useEffect(() => {
+    setReferenceCursor(null);
+  }, [p.tool, p.active.id, p.active.revision]);
   const pad = {
       l: 54,
       r: 22,
@@ -678,7 +689,7 @@ export function SpectrumPlot(p: Props) {
           });
           return;
         }
-        const integral = integralHit(x, y);
+        const integral = p.tool === "reference" ? undefined : integralHit(x, y);
         if (integral) {
           p.onIntegralSelect(integral.t.s.id, integral.i.id);
           const xf = xPixel(integral.i.from) + integral.t.horizontalOffset,
@@ -740,12 +751,38 @@ export function SpectrumPlot(p: Props) {
             );
           return;
         }
-        setCursor(x);
-        p.onCursor(ppm);
+        if (
+          p.tool === "reference" &&
+          !isFid &&
+          !space.current &&
+          x >= pad.l &&
+          x <= pad.l + pw &&
+          y >= pad.t &&
+          y <= pad.t + ph
+        ) {
+          const offset = activeTrace?.horizontalOffset ?? 0;
+          const position = ppmAt(x - offset);
+          const peak = snapReferencePeak(
+            p.active.data,
+            p.active.referenceOffset,
+            position,
+            ((v[0] - v[1]) * 8) / pw,
+          );
+          const reference = peak?.ppm ?? position;
+          const xx = xPixel(reference) + offset;
+          setReferenceCursor({ ppm: reference, x: xx, y, snapped: !!peak });
+          setCursor(xx);
+          p.onCursor(reference);
+        } else {
+          setReferenceCursor(null);
+          setCursor(x);
+          p.onCursor(ppm);
+        }
         setDrag((d) => (d ? { ...d, end: x } : null));
       }}
       onPointerLeave={() => {
         setCursor(null);
+        setReferenceCursor(null);
         setRegionHover(false);
       }}
       onPointerCancel={() => {
@@ -796,6 +833,16 @@ export function SpectrumPlot(p: Props) {
             if (hit.distance < 18)
               p.onSelect(closest.s.id, e.shiftKey || e.metaKey || e.ctrlKey);
             else p.onDeselect();
+          } else if (p.tool === "reference") {
+            const offset = activeTrace?.horizontalOffset ?? 0;
+            const position = ppmAt(end - offset);
+            const peak = snapReferencePeak(
+              p.active.data,
+              p.active.referenceOffset,
+              position,
+              ((v[0] - v[1]) * 8) / pw,
+            );
+            p.onPoint(peak?.ppm ?? position, peak?.value ?? 0);
           } else
             p.onPoint(
               a,
@@ -1365,16 +1412,48 @@ export function SpectrumPlot(p: Props) {
               </g>
             );
           })}
-        {cursor !== null && cursor >= pad.l && cursor <= pad.l + pw && (
-          <line
-            x1={cursor}
-            x2={cursor}
-            y1={pad.t}
-            y2={pad.t + ph}
-            data-ui="true"
-            className="crosshair"
-          />
-        )}
+        {p.tool !== "reference" &&
+          cursor !== null &&
+          cursor >= pad.l &&
+          cursor <= pad.l + pw && (
+            <line
+              x1={cursor}
+              x2={cursor}
+              y1={pad.t}
+              y2={pad.t + ph}
+              data-ui="true"
+              className="crosshair"
+            />
+          )}
+        {p.tool === "reference" &&
+          !isFid &&
+          (referenceCursor || p.referencePpm != null) &&
+          (() => {
+            const ppm = p.referencePpm ?? referenceCursor!.ppm;
+            const x = xPixel(ppm) + (activeTrace?.horizontalOffset ?? 0);
+            const y = Math.max(
+              pad.t + 14,
+              Math.min(pad.t + ph - 14, referenceCursor?.y ?? pad.t + ph * 0.3),
+            );
+            if (x < pad.l || x > pad.l + pw) return null;
+            return (
+              <g
+                data-ui="true"
+                data-testid="reference-marker"
+                data-snapped={
+                  p.referencePpm != null || referenceCursor?.snapped
+                }
+                className="reference-marker"
+              >
+                <line x1={x} x2={x} y1={pad.t} y2={pad.t + ph} />
+                <circle cx={x} cy={y} r={8} />
+                <path d={`M${x - 8},${y}h16`} />
+                <text x={Math.min(pad.l + pw - 63, x + 12)} y={y - 12}>
+                  {ppm.toFixed(4)}
+                </text>
+              </g>
+            );
+          })()}
         {drag && !drag.pan && !drag.shiftId && !drag.integral && (
           <rect
             data-ui="true"

@@ -1,6 +1,8 @@
 # Opening Mnova documents in Web NMR
 
-Web NMR reads **Mnova 17 JSON document files (`.mnjs`)** and exported **JSON NMR datasets (`.json`)**. Native `.mnova` documents use a proprietary binary format and cannot currently be decoded directly in the browser.
+Web NMR opens supported **native `.mnova` documents directly in the browser**, preserving modern 1D real/complex processed spectra and real-only processed 2D matrices. Saved intensities and calibrated axes are read from the native data; existing phase and baseline are retained. See [the native reader capabilities, limits and reproducible codec build](mnova-codec/README.md).
+
+Web NMR also reads **Mnova 17 JSON document files (`.mnjs`)** and exported **JSON NMR datasets (`.json`)**. The optional JSON route below restores ordered/hidden stacks and available 1D FIDs; it can also be useful when a native serialization dialect is unsupported.
 
 1. Open the `.mnova` document in Mnova 17 or later.
 2. Choose **File → Save As → MestReNova JSON Document** and save a `.mnjs` copy.

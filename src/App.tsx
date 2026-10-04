@@ -1,4 +1,12 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Activity,
   ArrowDown,
@@ -66,6 +74,9 @@ import {
   autoMultiplets,
 } from "./core/numerics";
 import { suitableTraceSources } from "./features/twoDTraces";
+import { ReferenceDialog } from "./components/ReferenceDialog";
+import { snapReferencePeak } from "./features/reference";
+import { snapTwoDPeak } from "./core/twoDProcessing";
 import { ProjectTabs } from "./components/ProjectTabs";
 import {
   createWorkspace,
@@ -75,6 +86,8 @@ import {
   activateDocument,
   addDocument,
   closeDocument,
+  deleteWorkspaceDocument,
+  hasWorkspaceRecovery,
   reopenDocument,
   renameDocument,
   loadWorkspaceRecovery,
@@ -134,6 +147,12 @@ import {
 import { NmrToolIcon, type NmrIconKind } from "./components/NmrToolIcon";
 import { KineticsWorkspace } from "./components/KineticsWorkspace";
 import type { KineticsMeasurementOptions } from "./features/kinetics";
+
+const SpectrumExportDialog = lazy(() =>
+  import("./components/SpectrumExportDialog").then((module) => ({
+    default: module.SpectrumExportDialog,
+  })),
+);
 
 type WorkspaceSnapshot = {
   spectra: Spectrum[];
@@ -520,6 +539,11 @@ export default function App() {
   const [twoDPanel, setTwoDPanel] = useState<TwoDPanel | null>(null);
   const [twoDDraft, setTwoDDraft] = useState<TwoDProcessingRecipe | null>(null);
   const [twoDPreview, setTwoDPreview] = useState<TwoDSpectrum | null>(null);
+  const [spectrumExportOpen, setSpectrumExportOpen] = useState(false);
+  const [referencePosition, setReferencePosition] = useState<number | null>(
+    null,
+  );
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
   const [twoDReference, setTwoDReference] = useState<{
     x: number;
     y: number;
@@ -1024,6 +1048,34 @@ export default function App() {
     if (id === next.activeDocumentId) setProjectName(name);
   }
   const notify = (message: string) => setToast(message);
+  async function deleteRecoveryProject(id?: string) {
+    if (!recovery || recoveryBusy) return;
+    setRecoveryBusy(true);
+    try {
+      const ids = id
+        ? [id]
+        : [...recovery.documents, ...recovery.closedDocuments].map((d) => d.id);
+      const next = ids.reduce(
+        (w, deleted) => deleteWorkspaceDocument(w, deleted),
+        recovery,
+      );
+      if (!(await saveWorkspaceRecovery(next)))
+        throw new Error(
+          "Could not delete the local recovery copy. Browser storage is unavailable.",
+        );
+      if (hasWorkspaceRecovery(next)) setRecovery(next);
+      else {
+        setWorkspace(next);
+        setRecovery(null);
+        setReady(true);
+      }
+      notify(id ? "Local project deleted" : "Local recovery projects deleted");
+    } catch (e) {
+      notify(err(e));
+    } finally {
+      setRecoveryBusy(false);
+    }
+  }
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(""), 5000);
@@ -1121,6 +1173,8 @@ export default function App() {
     setTwoDPanel(null);
     setTwoDPreview(null);
     setTwoDReference(null);
+    setReferencePosition(null);
+    setSpectrumExportOpen(false);
   }, [documents.activeDocumentId, activeId]);
   useEffect(() => {
     phaseEpoch.current++;
@@ -1351,7 +1405,7 @@ export default function App() {
     setBusy("Reading spectra…");
     try {
       const projectFiles = files.filter((f) =>
-        /\.(webnmr|mnjs)$/i.test(f.name),
+        /\.(webnmr|mnjs|mnova)$/i.test(f.name),
       );
       if (projectFiles.length && !attachTo2DId) {
         let nextWorkspace = captureWorkspace();
@@ -1364,12 +1418,13 @@ export default function App() {
             if (!imported.spectra.length)
               throw new Error(
                 imported.warnings.join(" · ") ||
-                  "No spectra found in the Mnova JSON document.",
+                  "No supported spectra found in the Mnova document.",
               );
             const first = imported.spectra[0];
             project = {
               ...createBlankProject(
-                imported.projectName || file.name.replace(/\.mnjs$/i, ""),
+                imported.projectName ||
+                  file.name.replace(/\.(mnjs|mnova)$/i, ""),
               ),
               spectra: imported.spectra,
               activeId: first.id,
@@ -1870,8 +1925,9 @@ export default function App() {
     if (!active || busy) return;
     if (tool === "reference") {
       setClickedPpm(ppm);
-      setPanel("reference");
-      setInspectorOpen(true);
+      setTargetPpm(ppm);
+      setReferencePosition(ppm);
+      setInspectorOpen(false);
     } else if (tool === "baseline") {
       setDraft((d) => ({
         ...d,
@@ -1915,17 +1971,24 @@ export default function App() {
       notify(`Peak at ${pk.ppm.toFixed(3)} ppm`);
     }
   }
-  function reference() {
+  function reference(
+    position = clickedPpm,
+    target = targetPpm,
+    annotation = "",
+  ) {
     if (!active || busy) return;
-    const delta = targetPpm - clickedPpm;
+    const delta = target - position;
     changeActive((s) => ({
       ...shiftSpectrum(s, delta),
+      metadata: { ...s.metadata, referenceAnnotation: annotation },
       history: [
         ...s.history,
-        `Reference · ${fmt(clickedPpm)} → ${fmt(targetPpm)} ppm`,
+        `Reference · ${fmt(position)} → ${fmt(target)} ppm${annotation ? " · " + annotation : ""}`,
       ],
     }));
     zoom([view[0] + delta, view[1] + delta]);
+    setReferencePosition(null);
+    setTool("select");
     notify(`Reference shifted by ${delta.toFixed(4)} ppm`);
   }
   function autoIntegrals() {
@@ -2311,15 +2374,20 @@ export default function App() {
       if (ticket === job.current) setBusy("");
     }
   }
-  function applyTwoDReference() {
+  function applyTwoDReference(
+    positions: number[],
+    targets: number[],
+    annotation: string,
+  ) {
     if (!active?.twoD || !twoDReference || busy) return;
-    const dx = twoDReference.targetX - twoDReference.x,
-      dy = twoDReference.targetY - twoDReference.y;
+    const dx = targets[0] - positions[0],
+      dy = targets[1] - positions[1];
     if (!Number.isFinite(dx + dy)) return;
     const v = initialTwoDView(active);
     changeActive((s) => ({
       ...s,
       referenceOffset: s.referenceOffset + dx,
+      metadata: { ...s.metadata, referenceAnnotation: annotation },
       twoD: { ...s.twoD!, referenceOffsetF1: s.twoD!.referenceOffsetF1 + dy },
       twoDView: {
         ...v,
@@ -2370,7 +2438,7 @@ export default function App() {
         : undefined,
       history: [
         ...s.history,
-        `2D reference · F2 ${dx.toFixed(5)} ppm · F1 ${dy.toFixed(5)} ppm`,
+        `2D reference · F2 ${dx.toFixed(5)} ppm · F1 ${dy.toFixed(5)} ppm${annotation ? " · " + annotation : ""}`,
       ],
     }));
     setTwoDReference(null);
@@ -2466,6 +2534,16 @@ export default function App() {
     const s = svgExport.current?.();
     if (!s) throw new Error("No figure available");
     return s;
+  }
+  function openSpectrumReport() {
+    if (busy) return;
+    if (preview || twoDPreview || baselineOpen || twoDPanel) {
+      notify(
+        "Apply or cancel the processing preview before exporting the Excel report.",
+      );
+      return;
+    }
+    setSpectrumExportOpen(true);
   }
   async function png() {
     try {
@@ -2657,7 +2735,10 @@ export default function App() {
       }
       if (e.key === "Escape") {
         e.preventDefault();
-        if (integralEdit) setIntegralEdit(null);
+        if (spectrumExportOpen) setSpectrumExportOpen(false);
+        else if (referencePosition !== null) setReferencePosition(null);
+        else if (twoDReference) setTwoDReference(null);
+        else if (integralEdit) setIntegralEdit(null);
         else if (propertiesOpen) setPropertiesOpen(false);
         else if (contextMenu) setContextMenu(null);
         else if (help) setHelp(false);
@@ -2668,7 +2749,16 @@ export default function App() {
         } else cancelPreview();
         return;
       }
-      if (busy || propertiesOpen || integralEdit || kinSettingsOpen) return;
+      if (
+        busy ||
+        propertiesOpen ||
+        integralEdit ||
+        kinSettingsOpen ||
+        referencePosition !== null ||
+        twoDReference ||
+        spectrumExportOpen
+      )
+        return;
       if (baselineOpen && k !== "b") return;
       if (tab === "Kinetics" && !command && !e.altKey && !e.shiftKey) {
         if (k === "i") {
@@ -3316,6 +3406,15 @@ export default function App() {
           <>
             <div className="ribbon-group">
               <RibbonButton
+                icon={Download}
+                label="Excel report"
+                disabled={!active}
+                onClick={openSpectrumReport}
+              />
+              <span className="group-label">Spectrum & analysis</span>
+            </div>
+            <div className="ribbon-group">
+              <RibbonButton
                 icon={FileImage}
                 label="SVG figure"
                 onClick={() => {
@@ -3339,11 +3438,6 @@ export default function App() {
               <span className="group-label">Figure</span>
             </div>
             <div className="ribbon-group">
-              <RibbonButton
-                icon={Download}
-                label="Spectrum CSV"
-                onClick={() => active && exportSpectrumCSV(active)}
-              />
               <RibbonButton
                 icon={Download}
                 label="JCAMP-DX"
@@ -4074,6 +4168,11 @@ export default function App() {
                       )
                     }
                     tool={tool}
+                    referencePoint={
+                      twoDReference
+                        ? { x: twoDReference.x, y: twoDReference.y }
+                        : undefined
+                    }
                     grid={grid}
                     properties={activeProperties}
                     exportRef={svgExport}
@@ -4112,6 +4211,7 @@ export default function App() {
                     mode={mode}
                     normalization={normalization}
                     tool={tool}
+                    referencePpm={referencePosition}
                     gain={plotGain}
                     component={component}
                     grid={grid}
@@ -5018,45 +5118,18 @@ export default function App() {
                 ) : panel === "reference" ? (
                   <>
                     <p className="panel-description">
-                      Click the reference signal on the spectrum, then enter its
-                      known chemical shift.
+                      Press R, point at a signal, then click to open the
+                      reference dialog. The red marker snaps to nearby peaks.
                     </p>
-                    <NumberField
-                      label="Observed position (ppm)"
-                      value={clickedPpm}
-                      onChange={setClickedPpm}
-                      step={0.0001}
-                    />
-                    <NumberField
-                      label="Reference position (ppm)"
-                      value={targetPpm}
-                      onChange={setTargetPpm}
-                      step={0.0001}
-                    />
-                    <Field label="Common reference">
-                      <select
-                        value=""
-                        onChange={(e) => setTargetPpm(Number(e.target.value))}
-                      >
-                        <option value="" disabled>
-                          Choose a signal…
-                        </option>
-                        <option value="0">TMS / DSS · 0.00 ppm</option>
-                        <option value="7.26">CDCl₃ · ¹H 7.26 ppm</option>
-                        <option value="2.5">DMSO-d₆ · ¹H 2.50 ppm</option>
-                        <option value="3.31">CD₃OD · ¹H 3.31 ppm</option>
-                        <option value="77.16">CDCl₃ · ¹³C 77.16 ppm</option>
-                        <option value="39.52">DMSO-d₆ · ¹³C 39.52 ppm</option>
-                      </select>
-                    </Field>
-                    <button className="primary full-width" onClick={reference}>
-                      <Check size={14} />
-                      Apply reference
+                    <button
+                      className="secondary full-width"
+                      onClick={() => {
+                        setTool("reference");
+                        setInspectorOpen(false);
+                      }}
+                    >
+                      Pick reference signal
                     </button>
-                    <p className="muted-small">
-                      Current offset: {active.referenceOffset.toFixed(4)} ppm.
-                      Peak and region positions move with the spectrum.
-                    </p>
                   </>
                 ) : panel === "peaks" ? (
                   <>
@@ -5466,10 +5539,10 @@ export default function App() {
                     <div className="section-title">Numerical data</div>
                     <button
                       className="secondary full-width"
-                      onClick={() => exportSpectrumCSV(active)}
+                      onClick={openSpectrumReport}
                     >
                       <Download size={14} />
-                      Full spectrum CSV
+                      Excel spectrum & analysis report
                     </button>
                     <button
                       className="secondary full-width"
@@ -5590,10 +5663,12 @@ export default function App() {
               ))}
             </ul>
             <p>
-              Supported here: Bruker 1D and 2D (including COSY and NOESY), Mnova
-              JSON documents (.mnjs), supported JCAMP-DX, CSV and TSV. Import
-              the complete experiment folder or ZIP, including pdata. Native
-              .mnova documents need a .mnjs copy saved from Mnova 17 or later.
+              Supported here: Bruker 1D and 2D (including COSY and NOESY), saved
+              1D and real-only processed 2D spectra in supported native Mnova
+              documents (.mnova), Mnova JSON documents (.mnjs), supported
+              JCAMP-DX, CSV and TSV. Import the complete experiment folder or
+              ZIP, including pdata. Unknown native document versions are
+              reported explicitly.
             </p>
             <button className="primary" onClick={() => setWarnings([])}>
               Continue
@@ -5626,9 +5701,39 @@ export default function App() {
               <br />
               Last saved {new Date(recovery.savedAt).toLocaleString()}
             </p>
+            <div className="recovery-projects">
+              {[...recovery.documents, ...recovery.closedDocuments].map((d) => (
+                <div className="recovery-project" key={d.id}>
+                  <FileText size={18} />
+                  <div>
+                    <strong>{d.project.name}</strong>
+                    <span>
+                      {d.project.spectra.length} spectra
+                      {recovery.closedDocuments.some((c) => c.id === d.id)
+                        ? " · recently closed"
+                        : ""}
+                    </span>
+                  </div>
+                  <button
+                    className="icon-button"
+                    aria-label={`Delete recovered project ${d.project.name}`}
+                    title="Delete local recovery copy"
+                    disabled={recoveryBusy}
+                    onClick={() => void deleteRecoveryProject(d.id)}
+                  >
+                    <Trash2 size={17} />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <p className="muted-small">
+              Deleted projects are removed from browser recovery. Saved files on
+              your computer are kept.
+            </p>
             <div className="processing-buttons">
               <button
                 className="primary"
+                disabled={recoveryBusy}
                 onClick={() => {
                   setWorkspace(recovery);
                   setRecovery(null);
@@ -5639,6 +5744,7 @@ export default function App() {
               </button>
               <button
                 className="secondary"
+                disabled={recoveryBusy}
                 onClick={() => {
                   void clearWorkspaceRecovery();
                   setRecovery(null);
@@ -5648,6 +5754,13 @@ export default function App() {
                 Start with example
               </button>
             </div>
+            <button
+              className="text-button recovery-delete-all"
+              disabled={recoveryBusy}
+              onClick={() => void deleteRecoveryProject()}
+            >
+              <Trash2 size={14} /> Delete all recovery projects
+            </button>
           </div>
         </div>
       )}
@@ -5888,61 +6001,79 @@ export default function App() {
           onPickBaseline={() => setTool("baseline")}
         />
       )}
-      {twoDReference && active?.twoD && (
-        <div
-          className="two-d-reference"
-          role="dialog"
-          aria-label="Reference 2D spectrum"
+      {spectrumExportOpen && active && (
+        <Suspense
+          fallback={
+            <div className="reference-backdrop">
+              <div className="modal" role="status">
+                Loading Excel export…
+              </div>
+            </div>
+          }
         >
-          <h3>Reference 2D spectrum</h3>
-          <p>
-            Snapped peak: F2 {twoDReference.x.toFixed(4)} · F1{" "}
-            {twoDReference.y.toFixed(4)} ppm
-          </p>
-          <label className="field">
-            <span>F2 reference (ppm)</span>
-            <input
-              aria-label="F2 reference ppm"
-              type="number"
-              step=".001"
-              value={twoDReference.targetX}
-              onChange={(e) =>
-                Number.isFinite(e.target.valueAsNumber) &&
-                setTwoDReference({
-                  ...twoDReference,
-                  targetX: e.target.valueAsNumber,
-                })
-              }
-            />
-          </label>
-          <label className="field">
-            <span>F1 reference (ppm)</span>
-            <input
-              aria-label="F1 reference ppm"
-              type="number"
-              step=".001"
-              value={twoDReference.targetY}
-              onChange={(e) =>
-                Number.isFinite(e.target.valueAsNumber) &&
-                setTwoDReference({
-                  ...twoDReference,
-                  targetY: e.target.valueAsNumber,
-                })
-              }
-            />
-          </label>
-          <footer>
-            <button
-              className="secondary"
-              onClick={() => setTwoDReference(null)}
-            >
-              Cancel
-            </button>
-            <button className="primary" onClick={applyTwoDReference}>
-              Apply reference
-            </button>
-          </footer>
-        </div>
+          <SpectrumExportDialog
+            spectrum={active}
+            showPeaks={showPeaks}
+            showMultiplets={activeProperties.multipletLabels}
+            getSVG={getFigure}
+            onClose={() => setSpectrumExportOpen(false)}
+            onSuccess={notify}
+          />
+        </Suspense>
+      )}
+      {referencePosition !== null && active && !active.twoD && (
+        <ReferenceDialog
+          key={`${active.id}-${referencePosition}`}
+          axes={[
+            {
+              label: "F1",
+              nucleus: active.nucleus,
+              observed: referencePosition,
+            },
+          ]}
+          onClose={() => setReferencePosition(null)}
+          onTune={(_, observed, width, absolute) =>
+            snapReferencePeak(
+              active.data,
+              active.referenceOffset,
+              observed,
+              width / 2,
+              absolute,
+            )?.ppm
+          }
+          onApply={(observed, targets, annotation) =>
+            reference(observed[0], targets[0], annotation)
+          }
+        />
+      )}
+      {twoDReference && active?.twoD && (
+        <ReferenceDialog
+          key={`${active.id}-${twoDReference.x}-${twoDReference.y}`}
+          axes={[
+            { label: "F2", nucleus: active.nucleus, observed: twoDReference.x },
+            {
+              label: "F1",
+              nucleus: active.twoD.nucleusF1,
+              observed: twoDReference.y,
+            },
+          ]}
+          onClose={() => setTwoDReference(null)}
+          onTune={(axis, observed, width, absolute) => {
+            const peak = snapTwoDPeak(
+              active.twoD!,
+              axis === 0 ? observed : twoDReference.x,
+              axis === 1 ? observed : twoDReference.y,
+              active.referenceOffset,
+              [width / 2, width / 2],
+            );
+            return peak && (absolute || peak.height > 0)
+              ? axis === 0
+                ? peak.xPpm
+                : peak.yPpm
+              : undefined;
+          }}
+          onApply={applyTwoDReference}
+        />
       )}
       {baselineOpen && active && (
         <BaselineDialog
@@ -6024,17 +6155,20 @@ export default function App() {
             </div>
             <p className="muted-small">
               Core mappings follow Mnova 17. This version supports horizontal
-              zoom; Mnova's alternate zoom modes and two-click graphic reference
-              are simplified. Shortcuts pause while you type.
+              zoom. Reference uses a red peak picker and a manual or solvent
+              dialog. Shortcuts pause while you type.
             </p>
             <div className="section-title">Bring your data</div>
             <p>
               Use <b>Open folder</b> for a complete Bruker experiment, or ZIP it
               and use <b>Open files</b>. Processed data are preferred when
               available. CSV needs two numeric columns (ppm, intensity); JCAMP
-              supports the defined 1D profile. Bruker processed 2D and raw
-              States/States-TPPI magnitude data are supported. Native Mnova
-              projects and other raw 2D modes are not read here.
+              supports the defined 1D profile. Bruker processed 2D and supported
+              raw acquisition modes retain separate axes. Supported native Mnova
+              documents open saved 1D traces and real-only processed 2D planes
+              directly, with their existing phase and baseline corrections.
+              Complex native 2D, raw reprocessing and page artwork require
+              another supported import format.
             </p>
             <a
               href="https://mestrelab.com/downloads/mnova/manuals/latest/shortcuts.html"
@@ -6043,6 +6177,12 @@ export default function App() {
             >
               Mnova documentation ↗
             </a>
+            <p className="muted-small">
+              Native compressed spectra use OpenJPEG.{" "}
+              <a href="/licenses/OpenJPEG.txt" target="_blank" rel="noreferrer">
+                OpenJPEG license
+              </a>
+            </p>
           </div>
         </div>
       )}

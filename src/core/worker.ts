@@ -1,4 +1,4 @@
-import { importEntries } from "./imports";
+import { importEntriesAsync } from "./imports";
 import { autoPhase, processSpectrum, processWithBaseline } from "./numerics";
 import type { ImportEntry, Spectrum } from "../model";
 import { processTwoD, autoPhaseTwoD } from "./twoDProcessing";
@@ -21,12 +21,12 @@ function outputBuffers(
     for (const child of Object.values(value)) outputBuffers(child, found);
   return [...found];
 }
-self.onmessage = (event: MessageEvent<Request>) => {
+self.onmessage = async (event: MessageEvent<Request>) => {
   const request = event.data;
   try {
     const result =
       request.type === "import"
-        ? importEntries(request.entries)
+        ? await importEntriesAsync(request.entries)
         : request.type === "processTwoD"
           ? processTwoD(request.spectrum)
           : request.type === "phaseTwoD"
