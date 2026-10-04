@@ -2,6 +2,7 @@ import { zip, unzip, strToU8, strFromU8, type Zippable } from "fflate";
 import { get, set, del } from "idb-keyval";
 import type { ComplexData, Project, Spectrum, TwoDSpectrum } from "../model";
 import { validProperties } from "./appearance";
+import { validTwoDView } from "./twoDTraces";
 
 const MAX_BYTES = 256 * 1024 * 1024;
 const MAX_POINTS = 8_388_608;
@@ -192,6 +193,10 @@ export function validateProject(value: unknown): asserts value is Project {
     validateData(s.original);
     validateData(s.data);
     if (s.twoD) validateTwoD(s.twoD);
+    assert(
+      s.twoDView === undefined || (s.twoD && validTwoDView(s.twoDView)),
+      "Invalid 2D view settings.",
+    );
     if (s.fid) {
       const f = s.fid;
       assert(
@@ -317,8 +322,11 @@ export function validateProject(value: unknown): asserts value is Project {
           text(calibration.anchorId) &&
           finite(calibration.target) &&
           calibration.target > 0 &&
-          (calibration.tentative === undefined || typeof calibration.tentative === "boolean") &&
-          s.integrals.some(i => i.id === calibration.anchorId && i.area !== 0),
+          (calibration.tentative === undefined ||
+            typeof calibration.tentative === "boolean") &&
+          s.integrals.some(
+            (i) => i.id === calibration.anchorId && i.area !== 0,
+          ),
         "Invalid integral calibration reference.",
       );
     }

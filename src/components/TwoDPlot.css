@@ -1,0 +1,76 @@
+.two-d-plot .two-d-settings-toggle {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  z-index: 4;
+  border: 1px solid #505a67;
+  border-radius: 4px;
+  background: #262b32ed;
+  color: #d4dce7;
+  padding: 5px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.two-d-plot .two-d-settings {
+  position: absolute;
+  top: 40px;
+  right: 8px;
+  z-index: 5;
+  width: min(280px, calc(100% - 20px));
+  box-sizing: border-box;
+  border: 1px solid #505a67;
+  border-radius: 5px;
+  box-shadow: 0 4px 15px #0003;
+  background: #262b32f5;
+  color: #d4dce7;
+  padding: 12px;
+  font-size: 12px;
+  display: grid;
+  gap: 10px;
+}
+.two-d-settings label {
+  display: grid;
+  gap: 4px;
+}
+.two-d-settings .two-d-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.two-d-settings input[type="number"] {
+  width: 65px;
+}
+.two-d-settings select,
+.two-d-settings input {
+  border: 1px solid #505967;
+  border-radius: 3px;
+  background: #1c2027;
+  color: #e0e6ee;
+  padding: 4px;
+  min-width: 0;
+}
+.two-d-settings button {
+  border: 1px solid #505967;
+  border-radius: 3px;
+  background: #343a43;
+  color: #e0e6ee;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+.two-d-settings small {
+  color: #a6b0bd;
+  line-height: 1.4;
+}
+.two-d-plot .two-d-instruction {
+  font-size: 10px;
+  position: absolute;
+  left: 9px;
+  bottom: 2px;
+  z-index: 3;
+  color: #64707e;
+  pointer-events: none;
+  max-width: calc(100% - 20px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

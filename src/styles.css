@@ -2299,3 +2299,95 @@ a {
       15 15,
     crosshair;
 }
+/* Compact spectrum tools leave more room for the document. */
+.ribbon {
+  height: 79px;
+  padding: 5px 11px 3px;
+  gap: 9px;
+}
+.ribbon-group {
+  padding: 0 10px 13px 0;
+  gap: 2px;
+}
+.ribbon-button {
+  height: 54px;
+  min-width: 56px;
+  max-width: 79px;
+  padding: 3px 5px;
+  gap: 2px;
+  font-size: 10px;
+}
+.ribbon-button svg {
+  width: 19px;
+  height: 19px;
+  flex-shrink: 0;
+}
+.ribbon-button .nmr-tool-icon {
+  width: 20px;
+  height: 20px;
+}
+.ribbon-button span {
+  max-width: 70px;
+}
+.ribbon-button kbd {
+  font-size: 8px;
+}
+.group-label {
+  font-size: 8px;
+}
+.ribbon-end {
+  padding-top: 8px;
+}
+.tool-rail {
+  overflow: visible;
+}
+.tool-rail button[data-tooltip] {
+  position: relative;
+}
+.tool-rail button[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  right: calc(100% + 9px);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 6px 9px;
+  border: 1px solid #596477;
+  border-radius: 4px;
+  background: #222831;
+  color: #edf2fa;
+  box-shadow: 0 3px 10px #0005;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 400;
+  z-index: 45;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.tool-rail button[data-tooltip]:hover::after,
+.tool-rail button[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 180ms;
+}
+.toast {
+  top: 12px;
+  right: 14px;
+  bottom: auto;
+  left: auto;
+  transform: none;
+  max-width: min(430px, calc(100vw - 28px));
+}
+@media (max-width: 620px) {
+  .ribbon-button {
+    min-width: 51px;
+    max-width: 68px;
+    font-size: 9px;
+  }
+  .toast {
+    top: 8px;
+    right: 8px;
+    bottom: auto;
+    width: auto;
+  }
+}

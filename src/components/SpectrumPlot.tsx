@@ -77,7 +77,7 @@ function safeXml(s: string) {
   );
 }
 const traceCache = new WeakMap<Float64Array, Map<string, [number, number][]>>();
-function decimate(
+export function decimate(
   x: Float64Array,
   y: Float64Array,
   offset: number,

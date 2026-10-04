@@ -1,57 +1,121 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { Spectrum, Tool } from "../model";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import type { Spectrum, Tool, TwoDView } from "../model";
 import type { SpectrumProperties } from "../features/appearance";
 import { contourPath, visibleGrid } from "../features/contours";
+import { maximumProjection } from "../core/twoD";
+import {
+  f1Pixel,
+  suitableTraceSources,
+  traceEnvelope,
+  tracePath,
+  validTwoDView,
+} from "../features/twoDTraces";
+import "./TwoDPlot.css";
 interface Props {
   spectrum: Spectrum;
+  spectra?: Spectrum[];
   tool: Tool;
   grid: boolean;
   properties: SpectrumProperties;
   exportRef: React.RefObject<(() => string) | null>;
   fullRef: React.RefObject<(() => void) | null>;
+  intensityRef?: React.RefObject<((factor: number) => void) | null>;
+  viewState?: TwoDView;
+  onViewChange?: (view: TwoDView) => void;
+}
+export function initialTwoDView(s: Spectrum, saved?: TwoDView): TwoDView {
+  if (validTwoDView(saved || s.twoDView)) return saved || s.twoDView!;
+  const m = s.twoD!;
+  let max = 0;
+  for (const value of m.real) max = Math.max(max, Math.abs(value));
+  const samples: number[] = [],
+    stride = Math.max(1, Math.floor(m.real.length / 8192));
+  for (let i = 0; i < m.real.length; i += stride)
+    samples.push(Math.abs(m.real[i]));
+  samples.sort((a, b) => a - b);
+  const sigma = (samples[Math.floor(samples.length / 2)] || 0) / 0.67449;
+  return {
+    xView: [m.x[0] + s.referenceOffset, m.x.at(-1)! + s.referenceOffset],
+    yView: [m.y[0] + m.referenceOffsetF1, m.y.at(-1)! + m.referenceOffsetF1],
+    threshold: Math.min(80, Math.max(1, (500 * sigma) / (max || 1))),
+    negative: m.mode !== "magnitude",
+    topGain: 1,
+    leftGain: 1,
+  };
 }
 export function TwoDPlot({
   spectrum: s,
+  spectra = [],
   tool,
   grid,
   properties: a,
   exportRef,
   fullRef,
+  intensityRef,
+  viewState,
+  onViewChange,
 }: Props) {
   const m = s.twoD!,
     host = useRef<HTMLDivElement>(null),
     svg = useRef<SVGSVGElement>(null),
-    space = useRef(false);
-  const [size, S] = useState({ w: 900, h: 600 }),
-    [xView, X] = useState<[number, number]>([m.x[0], m.x.at(-1)!]),
-    [yView, Y] = useState<[number, number]>([m.y[0], m.y.at(-1)!]),
-    [threshold, T] = useState(1),
-    [negative, N] = useState(true),
-    [drag, D] = useState<{
+    space = useRef(false),
+    clip = useId().replace(/:/g, "");
+  const [size, setSize] = useState({ w: 900, h: 600 }),
+    [view, setView] = useState<TwoDView>(() => initialTwoDView(s, viewState)),
+    [settings, setSettings] = useState(false);
+  const [drag, setDrag] = useState<{
       x: number;
       y: number;
       endX: number;
       endY: number;
       pan: boolean;
     } | null>(null),
-    [cursor, C] = useState<{ x: number; y: number } | null>(null);
-  const pad = { l: 58, r: 20, t: 18, b: 42 },
-    w = Math.max(100, size.w - pad.l - pad.r),
-    h = Math.max(100, size.h - pad.t - pad.b);
-  const px = (ppm: number) =>
-      pad.l + ((xView[0] - ppm) / (xView[0] - xView[1])) * w,
-    py = (ppm: number) =>
-      pad.t + ((yView[0] - ppm) / (yView[0] - yView[1])) * h;
-  const atX = (x: number) =>
-      xView[0] - ((x - pad.l) / w) * (xView[0] - xView[1]),
-    atY = (y: number) => yView[0] - ((y - pad.t) / h) * (yView[0] - yView[1]);
-  const full = () => {
-    X([m.x[0], m.x.at(-1)!]);
-    Y([m.y[0], m.y.at(-1)!]);
-  };
+    [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
+  const matrixIdentity = useRef(m);
+  const identity = useRef(s.id),
+    notify = useRef(onViewChange),
+    pendingChange = useRef(false);
+  notify.current = onViewChange;
   useEffect(() => {
-    full();
-  }, [s.id]);
+    if (identity.current !== s.id || matrixIdentity.current !== m) {
+      matrixIdentity.current = m;
+      identity.current = s.id;
+      pendingChange.current = false;
+      setView(initialTwoDView(s, viewState));
+      setDrag(null);
+      setCursor(null);
+    }
+  }, [s.id, m, viewState]);
+  useEffect(() => {
+    if (pendingChange.current && identity.current === s.id) {
+      pendingChange.current = false;
+      notify.current?.(view);
+    }
+  }, [view]);
+  const change = (produce: (current: TwoDView) => TwoDView) => {
+    pendingChange.current = true;
+    setView(produce);
+  };
+  const update = (patch: Partial<TwoDView>) =>
+    change((v) => ({ ...v, ...patch }));
+  const { xView, yView, threshold, negative } = view;
+  const left = Math.max(56, Math.min(105, size.w * 0.14)),
+    top = Math.max(56, Math.min(100, size.h * 0.19)),
+    right = 67,
+    bottom = 52;
+  const w = Math.max(20, size.w - left - right),
+    h = Math.max(20, size.h - top - bottom);
+  const px = (ppm: number) =>
+    left + ((xView[0] - ppm) / (xView[0] - xView[1])) * w;
+  const py = (ppm: number) => f1Pixel(ppm, yView, top, h);
+  const atX = (x: number) =>
+    xView[0] - ((x - left) / w) * (xView[0] - xView[1]);
+  const atY = (y: number) => yView[1] + ((y - top) / h) * (yView[0] - yView[1]);
+  const full = () =>
+    update({
+      xView: [m.x[0] + s.referenceOffset, m.x.at(-1)! + s.referenceOffset],
+      yView: [m.y[0] + m.referenceOffsetF1, m.y.at(-1)! + m.referenceOffsetF1],
+    });
   useEffect(() => {
     fullRef.current = full;
     return () => {
@@ -59,8 +123,19 @@ export function TwoDPlot({
     };
   });
   useEffect(() => {
+    if (!intensityRef) return;
+    intensityRef.current = (factor) =>
+      change((v) => ({
+        ...v,
+        threshold: Math.max(0.01, Math.min(80, v.threshold / factor)),
+      }));
+    return () => {
+      intensityRef.current = null;
+    };
+  });
+  useEffect(() => {
     const ro = new ResizeObserver((e) =>
-      S({ w: e[0].contentRect.width, h: e[0].contentRect.height }),
+      setSize({ w: e[0].contentRect.width, h: e[0].contentRect.height }),
     );
     if (host.current) ro.observe(host.current);
     return () => ro.disconnect();
@@ -87,21 +162,23 @@ export function TwoDPlot({
       window.removeEventListener("blur", up);
     };
   }, []);
-  const matrix = useMemo(() => visibleGrid(m, xView, yView), [m, xView, yView]);
+  const referenced = useMemo(
+    () => ({
+      ...m,
+      x: s.referenceOffset ? m.x.map((v) => v + s.referenceOffset) : m.x,
+      y: m.referenceOffsetF1 ? m.y.map((v) => v + m.referenceOffsetF1) : m.y,
+    }),
+    [m, s.referenceOffset],
+  );
+  const matrix = useMemo(
+    () => visibleGrid(referenced, xView, yView),
+    [referenced, xView, yView],
+  );
   const max = useMemo(() => {
     let v = 0;
     for (const n of m.real) v = Math.max(v, Math.abs(n));
     return v || 1;
   }, [m]);
-  useEffect(() => {
-    const sample: number[] = [];
-    const stride = Math.max(1, Math.floor(m.real.length / 8192));
-    for (let i = 0; i < m.real.length; i += stride)
-      sample.push(Math.abs(m.real[i]));
-    sample.sort((a, b) => a - b);
-    const sigma = (sample[Math.floor(sample.length / 2)] || 0) / 0.67449;
-    T(Math.min(80, Math.max(1, ((5 * sigma) / max) * 100)));
-  }, [m, max]);
   const paths = useMemo(
     () =>
       Array.from({ length: 9 }, (_, i) => ((max * threshold) / 100) * 1.6 ** i)
@@ -112,15 +189,94 @@ export function TwoDPlot({
             ? [{ positive: false, path: contourPath(matrix, -level, px, py) }]
             : []),
         ]),
-    [matrix, max, threshold, negative, w, h],
+    [matrix, max, threshold, negative, w, h, left, top],
+  );
+  const projections = useMemo(
+    () => ({
+      top: maximumProjection(m, "F2"),
+      left: maximumProjection(m, "F1"),
+    }),
+    [m],
+  );
+  const topSources = useMemo(
+    () =>
+      suitableTraceSources(spectra, s.nucleus, [
+        referenced.x[0],
+        referenced.x.at(-1)!,
+      ]),
+    [spectra, s.nucleus, referenced],
+  );
+  const leftSources = useMemo(
+    () =>
+      suitableTraceSources(spectra, m.nucleusF1, [
+        referenced.y[0],
+        referenced.y.at(-1)!,
+      ]),
+    [spectra, m.nucleusF1, referenced],
+  );
+  const topSource = topSources.find(
+      (candidate) => candidate.id === view.topSpectrumId,
+    ),
+    leftSource = leftSources.find(
+      (candidate) => candidate.id === view.leftSpectrumId,
+    );
+  const topPoints = useMemo(
+    () =>
+      traceEnvelope(
+        topSource?.data || projections.top,
+        topSource?.referenceOffset ?? s.referenceOffset,
+        xView,
+        w,
+      ),
+    [topSource, projections, s.referenceOffset, xView, w],
+  );
+  const leftPoints = useMemo(
+    () =>
+      traceEnvelope(
+        leftSource?.data || projections.left,
+        leftSource?.referenceOffset ?? m.referenceOffsetF1,
+        yView,
+        h,
+      ),
+    [leftSource, projections, m.referenceOffsetF1, yView, h],
+  );
+  const topPath = useMemo(
+    () =>
+      tracePath(
+        topPoints,
+        px,
+        top - 9,
+        Math.max(15, top - 28),
+        view.topGain,
+        "top",
+      ),
+    [topPoints, xView, w, left, top, view.topGain],
+  );
+  const leftPath = useMemo(
+    () =>
+      tracePath(
+        leftPoints,
+        py,
+        left - 9,
+        Math.max(15, left - 28),
+        view.leftGain,
+        "left",
+      ),
+    [leftPoints, yView, h, left, top, view.leftGain],
   );
   const ticks = (v: [number, number], pixels: number) => {
     const rough = (v[0] - v[1]) / Math.max(3, Math.floor(pixels / 80)),
       power = 10 ** Math.floor(Math.log10(rough)),
       step = ([1, 2, 5, 10].find((n) => n * power >= rough) || 10) * power,
-      result = [];
-    for (let x = Math.ceil(v[1] / step) * step; x <= v[0]; x += step)
+      result: number[] = [];
+    for (
+      let x = Math.ceil(v[1] / step) * step;
+      x <= v[0] && result.length < 100;
+      x += step
+    ) {
       result.push(x);
+      if (x + step === x) break;
+    }
     return result;
   };
   const xt = ticks(xView, w),
@@ -138,54 +294,104 @@ export function TwoDPlot({
       exportRef.current = null;
     };
   });
-  const pos = (e: React.PointerEvent) => {
+  const local = (e: { clientX: number; clientY: number }) => {
     const r = host.current!.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  };
+  const inContour = (p: { x: number; y: number }) =>
+    p.x >= left && p.x <= left + w && p.y >= top && p.y <= top + h;
+  const pos = (e: React.PointerEvent) => {
+    const p = local(e);
     return {
-      x: Math.max(pad.l, Math.min(pad.l + w, e.clientX - r.left)),
-      y: Math.max(pad.t, Math.min(pad.t + h, e.clientY - r.top)),
+      x: Math.max(left, Math.min(left + w, p.x)),
+      y: Math.max(top, Math.min(top + h, p.y)),
     };
   };
+  // A native non-passive listener prevents browser scrolling and isolates trace scaling from contour levels.
+  const wheelAction = useRef<(e: WheelEvent) => void>(() => {});
+  wheelAction.current = (e) => {
+    if (e.deltaY === 0) return;
+    if ((e.target as HTMLElement).closest("[data-two-d-controls]")) return;
+    const p = local(e),
+      factor = e.deltaY > 0 ? 1 / 1.15 : 1.15,
+      clamp = (gain: number) => Math.max(0.01, Math.min(100, gain * factor));
+    if (p.y < top && p.x >= left && p.x <= left + w) {
+      e.preventDefault();
+      change((v) => ({ ...v, topGain: clamp(v.topGain) }));
+    } else if (p.x < left && p.y >= top && p.y <= top + h) {
+      e.preventDefault();
+      change((v) => ({ ...v, leftGain: clamp(v.leftGain) }));
+    } else if (inContour(p)) {
+      e.preventDefault();
+      change((v) => ({
+        ...v,
+        threshold: Math.max(
+          0.01,
+          Math.min(80, v.threshold * (e.deltaY > 0 ? 1.15 : 1 / 1.15)),
+        ),
+      }));
+    }
+  };
+  useEffect(() => {
+    const el = host.current!,
+      listener = (e: WheelEvent) => wheelAction.current(e);
+    el.addEventListener("wheel", listener, { passive: false });
+    return () => el.removeEventListener("wheel", listener);
+  }, []);
   return (
     <div
       ref={host}
       className={`spectrum-plot two-d-plot tool-${tool}`}
       data-testid="two-d-plot"
-      onWheel={(e) =>
-        T((v) =>
-          Math.max(0.01, Math.min(80, v * (e.deltaY > 0 ? 1.15 : 1 / 1.15))),
-        )
-      }
-      onDoubleClick={full}
+      onDoubleClick={(e) => {
+        if (!(e.target as HTMLElement).closest("[data-two-d-controls]")) full();
+      }}
       onPointerDown={(e) => {
         if (
           e.button !== 0 ||
-          (e.target as HTMLElement).closest(".contour-controls")
+          (e.target as HTMLElement).closest("[data-two-d-controls]") ||
+          !inContour(local(e))
         )
           return;
         e.currentTarget.setPointerCapture(e.pointerId);
         const p = pos(e);
-        D({ ...p, endX: p.x, endY: p.y, pan: tool === "pan" || space.current });
+        setDrag({
+          ...p,
+          endX: p.x,
+          endY: p.y,
+          pan: tool === "pan" || space.current,
+        });
       }}
       onPointerMove={(e) => {
         const p = pos(e);
-        C(p);
-        D((d) => (d ? { ...d, endX: p.x, endY: p.y } : null));
+        setCursor(inContour(local(e)) ? p : null);
+        setDrag((d) => (d ? { ...d, endX: p.x, endY: p.y } : null));
       }}
       onPointerUp={() => {
         if (!drag) return;
         const d = drag;
-        D(null);
+        setDrag(null);
         if (d.pan) {
           const dx = ((d.endX - d.x) / w) * (xView[0] - xView[1]),
-            dy = ((d.endY - d.y) / h) * (yView[0] - yView[1]);
-          X([xView[0] + dx, xView[1] + dx]);
-          Y([yView[0] + dy, yView[1] + dy]);
-        } else if (Math.abs(d.endX - d.x) > 6 && Math.abs(d.endY - d.y) > 6) {
-          X([Math.max(atX(d.x), atX(d.endX)), Math.min(atX(d.x), atX(d.endX))]);
-          Y([Math.max(atY(d.y), atY(d.endY)), Math.min(atY(d.y), atY(d.endY))]);
-        }
+            dy = (-(d.endY - d.y) / h) * (yView[0] - yView[1]);
+          update({
+            xView: [xView[0] + dx, xView[1] + dx],
+            yView: [yView[0] + dy, yView[1] + dy],
+          });
+        } else if (Math.abs(d.endX - d.x) > 6 && Math.abs(d.endY - d.y) > 6)
+          update({
+            xView: [
+              Math.max(atX(d.x), atX(d.endX)),
+              Math.min(atX(d.x), atX(d.endX)),
+            ],
+            yView: [
+              Math.max(atY(d.y), atY(d.endY)),
+              Math.min(atY(d.y), atY(d.endY)),
+            ],
+          });
       }}
-      onPointerLeave={() => C(null)}
+      onPointerCancel={() => setDrag(null)}
+      onPointerLeave={() => setCursor(null)}
     >
       <svg
         ref={svg}
@@ -195,33 +401,71 @@ export function TwoDPlot({
       >
         <rect width={size.w} height={size.h} fill={a.background} />
         <defs>
-          <clipPath id="two-d-clip">
-            <rect x={pad.l} y={pad.t} width={w} height={h} />
+          <clipPath id={`${clip}-contour`}>
+            <rect x={left} y={top} width={w} height={h} />
+          </clipPath>
+          <clipPath id={`${clip}-top`}>
+            <rect x={left} y={8} width={w} height={top - 9} />
+          </clipPath>
+          <clipPath id={`${clip}-left`}>
+            <rect x={8} y={top} width={left - 9} height={h} />
           </clipPath>
         </defs>
+        <path
+          data-testid="top-projection"
+          d={topPath}
+          clipPath={`url(#${clip}-top)`}
+          fill="none"
+          stroke={topSource?.color || s.color}
+          strokeWidth={a.lineWidth}
+        />
+        <path
+          data-testid="left-projection"
+          d={leftPath}
+          clipPath={`url(#${clip}-left)`}
+          fill="none"
+          stroke={leftSource?.color || s.color}
+          strokeWidth={a.lineWidth}
+        />
+        <rect
+          data-ui="true"
+          x={left}
+          y={0}
+          width={w}
+          height={top}
+          fill="transparent"
+          style={{ cursor: "ns-resize" }}
+        >
+          <title>Scroll to adjust top trace intensity</title>
+        </rect>
+        <rect
+          data-ui="true"
+          x={0}
+          y={top}
+          width={left}
+          height={h}
+          fill="transparent"
+          style={{ cursor: "ew-resize" }}
+        >
+          <title>Scroll to adjust left trace intensity</title>
+        </rect>
         {grid && (
           <g stroke={a.gridColor} strokeWidth={a.gridWidth}>
             {xt.map((t) => (
-              <line
-                key={"x" + t}
-                x1={px(t)}
-                x2={px(t)}
-                y1={pad.t}
-                y2={pad.t + h}
-              />
+              <line key={"x" + t} x1={px(t)} x2={px(t)} y1={top} y2={top + h} />
             ))}
             {yt.map((t) => (
               <line
                 key={"y" + t}
-                x1={pad.l}
-                x2={pad.l + w}
+                x1={left}
+                x2={left + w}
                 y1={py(t)}
                 y2={py(t)}
               />
             ))}
           </g>
         )}
-        <g clipPath="url(#two-d-clip)">
+        <g clipPath={`url(#${clip}-contour)`}>
           {paths.map((p, i) => (
             <path
               key={i}
@@ -236,8 +480,8 @@ export function TwoDPlot({
         {a.title && (
           <text
             data-testid="spectrum-title"
-            x={pad.l + 5}
-            y={pad.t + a.titleSize + 3}
+            x={left + 5}
+            y={top + a.titleSize + 3}
             fontFamily={a.titleFont}
             fontSize={a.titleSize}
             fill={a.titleColor}
@@ -249,7 +493,7 @@ export function TwoDPlot({
               .map((line, i) => (
                 <tspan
                   key={i}
-                  x={pad.l + 5}
+                  x={left + 5}
                   dy={a.titleSize + 2}
                   fontSize={Math.max(9, a.titleSize - 2)}
                 >
@@ -264,14 +508,20 @@ export function TwoDPlot({
           fill={a.scaleColor}
           stroke={a.scaleColor}
         >
-          <line x1={pad.l} x2={pad.l + w} y1={pad.t + h} y2={pad.t + h} />
-          <line x1={pad.l} x2={pad.l} y1={pad.t} y2={pad.t + h} />
+          <rect
+            x={left}
+            y={top}
+            width={w}
+            height={h}
+            fill="none"
+            strokeWidth=".7"
+          />
           {xt.map((t) => (
             <g key={t}>
-              <line x1={px(t)} x2={px(t)} y1={pad.t + h} y2={pad.t + h + 4} />
+              <line x1={px(t)} x2={px(t)} y1={top + h} y2={top + h + 4} />
               <text
                 x={px(t)}
-                y={pad.t + h + 18}
+                y={top + h + 18}
                 stroke="none"
                 textAnchor="middle"
               >
@@ -281,22 +531,27 @@ export function TwoDPlot({
           ))}
           {yt.map((t) => (
             <g key={t}>
-              <line x1={pad.l - 4} x2={pad.l} y1={py(t)} y2={py(t)} />
-              <text x={pad.l - 8} y={py(t) + 3} stroke="none" textAnchor="end">
+              <line x1={left + w} x2={left + w + 4} y1={py(t)} y2={py(t)} />
+              <text
+                x={left + w + 8}
+                y={py(t) + 3}
+                stroke="none"
+                textAnchor="start"
+              >
                 {Number(t.toFixed(3))}
               </text>
             </g>
           ))}
           <text
-            x={pad.l + w / 2}
-            y={size.h - 7}
+            x={left + w / 2}
+            y={size.h - 19}
             textAnchor="middle"
             stroke="none"
           >
             F2 ({s.nucleus}, ppm)
           </text>
           <text
-            transform={`translate(14,${pad.t + h / 2}) rotate(-90)`}
+            transform={`translate(${size.w - 10},${top + h / 2}) rotate(-90)`}
             textAnchor="middle"
             stroke="none"
           >
@@ -305,8 +560,8 @@ export function TwoDPlot({
         </g>
         {cursor && (
           <g data-ui="true" className="crosshair">
-            <line x1={cursor.x} x2={cursor.x} y1={pad.t} y2={pad.t + h} />
-            <line x1={pad.l} x2={pad.l + w} y1={cursor.y} y2={cursor.y} />
+            <line x1={cursor.x} x2={cursor.x} y1={top} y2={top + h} />
+            <line x1={left} x2={left + w} y1={cursor.y} y2={cursor.y} />
           </g>
         )}
         {drag && !drag.pan && (
@@ -323,34 +578,100 @@ export function TwoDPlot({
           />
         )}
       </svg>
-      <div className="contour-controls">
-        <label>
-          Contour level
-          <input
-            aria-label="Contour level percent"
-            type="number"
-            min=".01"
-            max="80"
-            step=".25"
-            value={Number(threshold.toFixed(2))}
-            onChange={(e) =>
-              T(Math.max(0.01, Math.min(80, e.target.valueAsNumber || 1)))
-            }
-          />
-          %
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={negative}
-            onChange={(e) => N(e.target.checked)}
-          />
-          Negative
-        </label>
-        <button onClick={full}>Full 2D</button>
-      </div>
-      <div className="plot-instruction">
-        2D · drag to zoom · Space to pan · wheel adjusts contours
+      <button
+        type="button"
+        className="two-d-settings-toggle"
+        data-two-d-controls="true"
+        aria-label="2D display settings"
+        aria-expanded={settings}
+        onClick={() => setSettings((v) => !v)}
+      >
+        2D settings
+      </button>
+      {settings && (
+        <div className="two-d-settings" data-two-d-controls="true">
+          <label>
+            Top trace ({s.nucleus})
+            <select
+              aria-label="Top trace source"
+              value={topSource?.id || ""}
+              onChange={(e) =>
+                update({
+                  topSpectrumId: e.target.value || undefined,
+                  topGain: 1,
+                })
+              }
+            >
+              <option value="">2D projection</option>
+              {topSources.map((source) => (
+                <option key={source.id} value={source.id}>
+                  {source.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Left trace ({m.nucleusF1})
+            <select
+              aria-label="Left trace source"
+              value={leftSource?.id || ""}
+              onChange={(e) =>
+                update({
+                  leftSpectrumId: e.target.value || undefined,
+                  leftGain: 1,
+                })
+              }
+            >
+              <option value="">2D projection</option>
+              {leftSources.map((source) => (
+                <option key={source.id} value={source.id}>
+                  {source.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <small>
+            Import a 1D spectrum to use it here. Scroll over either trace to
+            adjust its height independently.
+          </small>
+          <div className="two-d-inline">
+            <button onClick={() => update({ topGain: 1, leftGain: 1 })}>
+              Reset trace heights
+            </button>
+            <button onClick={full}>Full 2D</button>
+          </div>
+          <label className="two-d-inline">
+            Contour level
+            <input
+              aria-label="Contour level percent"
+              type="number"
+              min=".01"
+              max="80"
+              step=".25"
+              value={Number(threshold.toFixed(2))}
+              onChange={(e) =>
+                update({
+                  threshold: Math.max(
+                    0.01,
+                    Math.min(80, e.target.valueAsNumber || 1),
+                  ),
+                })
+              }
+            />
+            %
+          </label>
+          <label className="two-d-inline">
+            <input
+              type="checkbox"
+              checked={negative}
+              onChange={(e) => update({ negative: e.target.checked })}
+            />
+            Negative contours
+          </label>
+        </div>
+      )}
+      <div className="two-d-instruction">
+        Drag to zoom · Space to pan · scroll over traces to scale
         {cursor
           ? ` · F2 ${atX(cursor.x).toFixed(3)} / F1 ${atY(cursor.y).toFixed(3)} ppm`
           : ""}

@@ -144,7 +144,7 @@ export const defaultProperties = (): SpectrumProperties => ({
   integralCurves: false,
   integralBaseline: false,
   integralDecimals: 2,
-  integralColor: "#40887b",
+  integralColor: "#187bd5",
   integralWidth: 1.2,
   integralSize: 10,
   integralFont: "Arial",

@@ -127,8 +127,20 @@ export interface TwoDSpectrum {
   mode: "absorption" | "magnitude";
   acquisitionMode?: "States" | "States-TPPI";
 }
+export interface TwoDView {
+  /** Referenced ppm ranges, always [higher, lower]; F1 increases toward the bottom. */
+  xView: [number, number];
+  yView: [number, number];
+  threshold: number;
+  negative: boolean;
+  topGain: number;
+  leftGain: number;
+  topSpectrumId?: string;
+  leftSpectrumId?: string;
+}
 export interface Spectrum {
   twoD?: TwoDSpectrum;
+  twoDView?: TwoDView;
   properties?: SpectrumProperties;
   id: string;
   label: string;

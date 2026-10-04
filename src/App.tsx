@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Activity,
   ArrowDown,
@@ -96,7 +96,7 @@ import {
 import { PropertiesDialog } from "./components/PropertiesDialog";
 import { BaselineDialog } from "./components/BaselineDialog";
 import type { SpectrumStack } from "./model";
-import { SpectrumPlot, dataStats } from "./components/SpectrumPlot";
+import { SpectrumPlot, dataStats, decimate } from "./components/SpectrumPlot";
 import {
   displayedIntegralValue,
   normalizeIntegral as calibrateIntegral,
@@ -105,7 +105,10 @@ import {
 } from "./features/integrals";
 import { IntegralDialog } from "./components/IntegralDialog";
 import { visibleGrid, contourPath } from "./features/contours";
-import { TwoDPlot } from "./components/TwoDPlot";
+import { maximumProjection } from "./core/twoD";
+import { traceEnvelope, tracePath, f1Pixel } from "./features/twoDTraces";
+import { TwoDPlot, initialTwoDView } from "./components/TwoDPlot";
+import { NmrToolIcon, type NmrIconKind } from "./components/NmrToolIcon";
 import { KineticsChart } from "./components/KineticsChart";
 
 type WorkspaceSnapshot = {
@@ -149,6 +152,22 @@ const toolText: Record<Tool, string> = {
 };
 const fmt = (v: number, d = 3) => (Number.isFinite(v) ? v.toFixed(d) : "—");
 const err = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const ribbonIcon: Record<string, NmrIconKind> = {
+  "Auto phase": "autoPhase",
+  "Manual phase": "phase",
+  "Baseline correction": "baseline",
+  "Manual baseline": "manualBaseline",
+  Apodization: "apodization",
+  "Fourier transform": "transform",
+  Reference: "reference",
+  "Auto peaks": "autoPeak",
+  "Manual peaks": "peak",
+  Integrals: "integral",
+  "Auto integrals": "autoIntegral",
+  "Mass integral": "integral",
+  Multiplets: "multiplet",
+  "Auto multiplets": "autoMultiplet",
+};
 function RibbonButton({
   icon: Icon,
   label,
@@ -171,7 +190,11 @@ function RibbonButton({
       onClick={onClick}
       disabled={disabled}
     >
-      <Icon size={23} strokeWidth={1.65} />
+      {ribbonIcon[label] ? (
+        <NmrToolIcon kind={ribbonIcon[label]} size={20} />
+      ) : (
+        <Icon size={19} strokeWidth={1.65} />
+      )}
       <span>{label}</span>
       {shortcut && <kbd>{shortcut}</kbd>}
     </button>
@@ -234,51 +257,171 @@ function NumberField({
     </Field>
   );
 }
-function MiniTwoD({ spectrum: s }: { spectrum: Spectrum }) {
+function MiniTwoD({
+  spectrum: s,
+  spectra,
+}: {
+  spectrum: Spectrum;
+  spectra: Spectrum[];
+}) {
+  const clip = useId().replace(/:/g, "");
+  const state = useMemo(
+    () => s.twoDView ?? initialTwoDView(s),
+    [s.twoDView, s.twoD, s.referenceOffset],
+  );
   const paths = useMemo(() => {
-    const m = s.twoD!,
-      g = visibleGrid(m, [m.x[0], m.x.at(-1)!], [m.y[0], m.y.at(-1)!], 65);
+    const m = s.twoD!;
+    const xv: [number, number] = state?.xView ?? [m.x[0], m.x.at(-1)!];
+    const yv: [number, number] = state?.yView ?? [m.y[0], m.y.at(-1)!];
+    const referenced = {
+      ...m,
+      x: s.referenceOffset ? m.x.map((v) => v + s.referenceOffset) : m.x,
+      y: m.referenceOffsetF1 ? m.y.map((v) => v + m.referenceOffsetF1) : m.y,
+    };
+    const g = visibleGrid(referenced, xv, yv, 65);
     let max = 0;
     for (const value of m.real) max = Math.max(max, Math.abs(value));
-    const xp = (x: number) => 2 + ((m.x[0] - x) / (m.x[0] - m.x.at(-1)!)) * 146,
-      yp = (y: number) => 2 + ((m.y[0] - y) / (m.y[0] - m.y.at(-1)!)) * 44;
+    const xp = (x: number) => 15 + ((xv[0] - x) / (xv[0] - xv[1])) * 132,
+      yp = (y: number) => f1Pixel(y, yv, 10, 36);
+    const level = (max * (state?.threshold ?? 2.5)) / 100;
     return [
-      contourPath(g, max * 0.025, xp, yp),
-      contourPath(g, -max * 0.025, xp, yp),
+      contourPath(g, level, xp, yp),
+      state?.negative === false ? "" : contourPath(g, -level, xp, yp),
     ];
-  }, [s.twoD]);
+  }, [s.twoD, state, s.referenceOffset]);
+  const projections = useMemo(
+    () => ({
+      top: maximumProjection(s.twoD!, "F2"),
+      left: maximumProjection(s.twoD!, "F1"),
+    }),
+    [s.twoD],
+  );
+  const traces = useMemo(() => {
+    const m = s.twoD!;
+    const xv: [number, number] = state?.xView ?? [
+      m.x[0] + s.referenceOffset,
+      m.x.at(-1)! + s.referenceOffset,
+    ];
+    const yv: [number, number] = state?.yView ?? [
+      m.y[0] + m.referenceOffsetF1,
+      m.y.at(-1)! + m.referenceOffsetF1,
+    ];
+    const top = spectra.find((v) => !v.twoD && v.id === state?.topSpectrumId),
+      left = spectra.find((v) => !v.twoD && v.id === state?.leftSpectrumId);
+    return [
+      tracePath(
+        traceEnvelope(
+          top?.data ?? projections.top,
+          top?.referenceOffset ?? s.referenceOffset,
+          xv,
+          132,
+        ),
+        (x) => 15 + ((xv[0] - x) / (xv[0] - xv[1])) * 132,
+        8,
+        6,
+        state?.topGain ?? 1,
+        "top",
+      ),
+      tracePath(
+        traceEnvelope(
+          left?.data ?? projections.left,
+          left?.referenceOffset ?? m.referenceOffsetF1,
+          yv,
+          36,
+        ),
+        (y) => f1Pixel(y, yv, 10, 36),
+        12,
+        9,
+        state?.leftGain ?? 1,
+        "left",
+      ),
+    ];
+  }, [s.twoD, state, s.referenceOffset, spectra, projections]);
   return (
-    <svg viewBox="0 0 150 48" aria-hidden="true">
-      <path d={paths[0]} stroke={s.color} fill="none" strokeWidth=".5" />
-      <path d={paths[1]} stroke="#287cb2" fill="none" strokeWidth=".5" />
+    <svg
+      viewBox="0 0 150 48"
+      aria-hidden="true"
+      data-testid={`preview-${s.id}`}
+    >
+      <defs>
+        <clipPath id={clip}>
+          <rect x="15" y="10" width="132" height="36" />
+        </clipPath>
+        <clipPath id={clip + "top"}>
+          <rect x="15" y="0" width="132" height="9" />
+        </clipPath>
+        <clipPath id={clip + "left"}>
+          <rect x="0" y="10" width="14" height="36" />
+        </clipPath>
+      </defs>
+      <g clipPath={`url(#${clip})`}>
+        <path d={paths[0]} stroke={s.color} fill="none" strokeWidth=".5" />
+        <path d={paths[1]} stroke="#287cb2" fill="none" strokeWidth=".5" />
+      </g>
+      <path
+        d={traces[0]}
+        clipPath={`url(#${clip}top)`}
+        stroke={
+          spectra.find((v) => v.id === state.topSpectrumId)?.color ?? s.color
+        }
+        fill="none"
+        strokeWidth=".5"
+      />
+      <path
+        d={traces[1]}
+        clipPath={`url(#${clip}left)`}
+        stroke={
+          spectra.find((v) => v.id === state.leftSpectrumId)?.color ?? s.color
+        }
+        fill="none"
+        strokeWidth=".5"
+      />
     </svg>
   );
 }
-function MiniTrace({ spectrum: s }: { spectrum: Spectrum }) {
+function MiniTrace({
+  spectrum: s,
+  view = extent(s.data, s.referenceOffset),
+  gain = s.gain,
+  component = "real",
+}: {
+  spectrum: Spectrum;
+  view?: [number, number];
+  gain?: number;
+  component?: "real" | "imag" | "magnitude" | "fid";
+}) {
   const path = useMemo(() => {
-    let d = "";
-    const y = s.data.real,
-      n = y.length,
-      max = dataStats(s.data).max;
-    for (let b = 0; b < 146; b++) {
-      let lo = Infinity,
-        hi = -Infinity;
-      for (
-        let i = Math.floor((b * n) / 146);
-        i < Math.floor(((b + 1) * n) / 146);
-        i++
-      ) {
-        lo = Math.min(lo, y[i]);
-        hi = Math.max(hi, y[i]);
-      }
-      if (!Number.isFinite(lo)) continue;
-      const x = b + 2;
-      d += `${d ? "L" : "M"}${x},${40 - (hi / max) * 34}L${x},${40 - (lo / max) * 34}`;
+    let x = s.data.x,
+      y = s.data.real,
+      offset = s.referenceOffset,
+      visible = view;
+    if (component === "imag" && s.data.imag) y = s.data.imag;
+    if (component === "magnitude")
+      y = Float64Array.from(y, (v, i) => Math.hypot(v, s.data.imag?.[i] ?? 0));
+    if (component === "fid" && s.fid) {
+      y = s.fid.real;
+      x = Float64Array.from(y, (_, i) => i * s.fid!.dwellSeconds);
+      offset = 0;
+      visible = [0, x.at(-1)!];
     }
-    return d;
-  }, [s.data]);
+    let max = dataStats(s.data).max;
+    if (component === "fid") {
+      max = 1e-20;
+      for (const v of y) max = Math.max(max, Math.abs(v));
+    }
+    return decimate(x, y, offset, visible, 146)
+      .map(
+        ([px, value], i) =>
+          `${i ? "L" : "M"}${px + 2},${40 - (value / max) * 34 * gain}`,
+      )
+      .join("");
+  }, [s.data, s.fid, s.referenceOffset, view[0], view[1], gain, component]);
   return (
-    <svg viewBox="0 0 150 48" aria-hidden="true">
+    <svg
+      viewBox="0 0 150 48"
+      aria-hidden="true"
+      data-testid={`preview-${s.id}`}
+    >
       <path d={path} stroke={s.color} fill="none" strokeWidth=".9" />
       <line x1="2" x2="148" y1="44" y2="44" stroke="#d8dde3" />
     </svg>
@@ -315,7 +458,7 @@ export default function App() {
   const [navigatorWidth, setNavigatorWidth] = useState(184),
     [inspectorWidth, setInspectorWidth] = useState(280),
     [resultsHeight, setResultsHeight] = useState(198),
-    [ribbonHeight, setRibbonHeight] = useState(99);
+    [ribbonHeight, setRibbonHeight] = useState(79);
   const [alignFrom, setAlignFrom] = useState(4.24),
     [alignTo, setAlignTo] = useState(4),
     [alignTarget, setAlignTarget] = useState(4.12),
@@ -333,6 +476,23 @@ export default function App() {
     [concentrationUnit, setConcentrationUnit] = useState("mM");
   const selectionAnchor = useRef<string>("");
   const baselineJob = useRef(0);
+  const phaseEpoch = useRef(0),
+    phaseRunning = useRef(false),
+    phaseLatest = useRef<{
+      spectrum: Spectrum;
+      recipe: ProcessingRecipe;
+      epoch: number;
+    } | null>(null);
+  const [navigatorViews, setNavigatorViews] = useState<
+    Record<
+      string,
+      {
+        view: [number, number];
+        gain: number;
+        component: "real" | "imag" | "magnitude" | "fid";
+      }
+    >
+  >({});
   const [projectName, setProjectName] = useState("Reaction monitoring"),
     [isDemo, setIsDemo] = useState(true),
     [tab, setTab] = useState<Tab>("Analysis"),
@@ -391,6 +551,7 @@ export default function App() {
     projectInput = useRef<HTMLInputElement>(null),
     svgExport = useRef<(() => string) | null>(null),
     twoDFull = useRef<(() => void) | null>(null),
+    twoDIntensity = useRef<((factor: number) => void) | null>(null),
     job = useRef(0),
     navigatorList = useRef<HTMLDivElement>(null);
   const active = spectra.find((s) => s.id === activeId) ?? spectra[0];
@@ -502,6 +663,68 @@ export default function App() {
     }
     setComponent("real");
   }, [activeId, active?.revision]);
+  useEffect(() => {
+    phaseEpoch.current++;
+    phaseLatest.current = null;
+    return () => {
+      phaseEpoch.current++;
+      phaseLatest.current = null;
+    };
+  }, [activeId, active?.revision, inspectorOpen, panel, busy, baselineOpen]);
+  useEffect(() => {
+    if (
+      !active ||
+      active.twoD ||
+      !inspectorOpen ||
+      panel !== "phase" ||
+      busy ||
+      baselineOpen ||
+      (!active.original.imag && !active.fid)
+    )
+      return;
+    if (JSON.stringify(draft) === JSON.stringify(active.recipe)) return;
+    phaseLatest.current = {
+      spectrum: active,
+      recipe: draft,
+      epoch: phaseEpoch.current,
+    };
+    if (phaseRunning.current) return;
+    phaseRunning.current = true;
+    void (async () => {
+      try {
+        while (phaseLatest.current) {
+          const request = phaseLatest.current;
+          phaseLatest.current = null;
+          try {
+            const result = await processBaselineAsync({
+              ...request.spectrum,
+              recipe: request.recipe,
+            });
+            if (request.epoch === phaseEpoch.current) setPreview(result.data);
+          } catch (e) {
+            if (request.epoch === phaseEpoch.current) notify(err(e));
+          }
+        }
+      } finally {
+        phaseRunning.current = false;
+      }
+    })();
+  }, [active, draft, inspectorOpen, panel, busy, baselineOpen]);
+  useEffect(() => {
+    if (!active || active.twoD) return;
+    setNavigatorViews((saved) => {
+      const old = saved[active.id];
+      if (
+        old &&
+        old.view[0] === view[0] &&
+        old.view[1] === view[1] &&
+        old.gain === plotGain &&
+        old.component === component
+      )
+        return saved;
+      return { ...saved, [active.id]: { view, gain: plotGain, component } };
+    });
+  }, [activeId, view, plotGain, component]);
   function snapshot(): WorkspaceSnapshot {
     return { spectra, stacks, activeId, activeStackId, mode };
   }
@@ -812,12 +1035,16 @@ export default function App() {
       });
     setTool("select");
     setKinPicking(false);
+    if (panel === "phase") setInspectorOpen(false);
+    phaseEpoch.current++;
+    phaseLatest.current = null;
     notify("Preview canceled");
   }
   async function autoPhase() {
     if (!active || busy || active.twoD) return;
-    setPanel("phase");
-    setInspectorOpen(true);
+    if (panel === "phase") setInspectorOpen(false);
+    phaseEpoch.current++;
+    phaseLatest.current = null;
     setBusy("Finding phase correction…");
     const ticket = ++job.current;
     try {
@@ -830,7 +1057,7 @@ export default function App() {
       const recipe = { ...sourceRecipe, ...result };
       setDraft(recipe);
       setBusy("");
-      await process("preview", recipe);
+      await process("apply", recipe);
     } catch (e) {
       if (ticket !== job.current) return;
       setBusy("");
@@ -1174,6 +1401,10 @@ export default function App() {
   }
   function gain(factor: number) {
     if (busy) return;
+    if (active?.twoD) {
+      twoDIntensity.current?.(factor);
+      return;
+    }
     if (mode === "single")
       setPlotGain((v) => Math.max(0.01, Math.min(100, v * factor)));
     else if (active)
@@ -1363,7 +1594,7 @@ export default function App() {
         setResultsHeight(
           Math.max(100, Math.min(window.innerHeight * 0.55, next)),
         );
-      else setRibbonHeight(Math.max(76, Math.min(170, next)));
+      else setRibbonHeight(Math.max(64, Math.min(170, next)));
     };
     const up = () => {
       window.removeEventListener("pointermove", move);
@@ -1717,10 +1948,12 @@ export default function App() {
           icon={SlidersHorizontal}
           label="Manual phase"
           shortcut="⇧ P"
-          active={panel === "phase"}
+          active={panel === "phase" && inspectorOpen}
           onClick={() => {
             setPanel("phase");
             setInspectorOpen(true);
+            if (active && !active.original.imag && active.fid)
+              setDraft((d) => ({ ...d, transform: true }));
           }}
         />
         <span className="group-label">Phase</span>
@@ -1889,6 +2122,36 @@ export default function App() {
       </div>
     </>
   );
+  function miniView(s: Spectrum, stack = false) {
+    const live =
+      s.id === activeId || (stack && !!activeStack?.spectrumIds.includes(s.id));
+    const settings = live
+      ? { view, gain: plotGain, component }
+      : navigatorViews[s.id];
+    const group =
+      mode !== "single" && live
+        ? plottedSpectra.filter(
+            (v) => !v.twoD && v.visible && v.nucleus === active?.nucleus,
+          )
+        : [s];
+    const largest = Math.max(...group.map((v) => dataStats(v.data).max), 1e-20);
+    const largestArea = Math.max(
+      ...group.map((v) => dataStats(v.data).area),
+      1e-20,
+    );
+    const stats = dataStats(s.data);
+    const norm =
+      normalization === "maximum"
+        ? largest / stats.max
+        : normalization === "area"
+          ? largestArea / stats.area
+          : 1;
+    return {
+      view: settings?.view ?? extent(s.data, s.referenceOffset),
+      gain: ((settings?.gain ?? 1) * s.gain * norm * stats.max) / largest,
+      component: settings?.component ?? ("real" as const),
+    };
+  }
   const visibleSpectra = spectra.filter((s) =>
     s.label.toLowerCase().includes(filter.toLowerCase()),
   );
@@ -2426,7 +2689,15 @@ export default function App() {
                     <div className="stack-thumbnail">
                       {st.spectrumIds.slice(0, 4).map((id) => {
                         const sp = spectra.find((s) => s.id === id);
-                        return sp ? <MiniTrace key={id} spectrum={sp} /> : null;
+                        return sp ? (
+                          <MiniTrace
+                            key={id}
+                            spectrum={
+                              sp.id === active?.id ? displayedActive! : sp
+                            }
+                            {...miniView(sp, activeStackId === st.id)}
+                          />
+                        ) : null;
                       })}
                     </div>
                     <div className="card-meta">
@@ -2484,9 +2755,12 @@ export default function App() {
                     </div>
                     <div className="thumbnail">
                       {s.twoD ? (
-                        <MiniTwoD spectrum={s} />
+                        <MiniTwoD spectrum={s} spectra={spectra} />
                       ) : (
-                        <MiniTrace spectrum={s} />
+                        <MiniTrace
+                          spectrum={s.id === active?.id ? displayedActive! : s}
+                          {...miniView(s)}
+                        />
                       )}
                     </div>
                     <div className="card-meta">
@@ -2931,12 +3205,23 @@ export default function App() {
               >
                 {active.twoD ? (
                   <TwoDPlot
+                    key={active.id}
                     spectrum={active}
+                    spectra={spectra}
+                    viewState={active.twoDView}
+                    onViewChange={(v) =>
+                      setSpectra((all) =>
+                        all.map((s) =>
+                          s.id === active.id ? { ...s, twoDView: v } : s,
+                        ),
+                      )
+                    }
                     tool={tool}
                     grid={grid}
                     properties={activeProperties}
                     exportRef={svgExport}
                     fullRef={twoDFull}
+                    intensityRef={twoDIntensity}
                   />
                 ) : (
                   <SpectrumPlot
@@ -3396,7 +3681,7 @@ export default function App() {
                   !!active?.twoD && !["select", "zoom", "pan"].includes(t)
                 }
                 aria-label={`${toolText[t]} tool`}
-                title={`${toolText[t]} ${key && "(" + key + ")"}`}
+                data-tooltip={`${toolText[t]}${key ? " (" + key + ")" : ""}`}
                 onClick={() =>
                   toolMode(
                     t,
@@ -3412,37 +3697,41 @@ export default function App() {
                   )
                 }
               >
-                <Icon size={18} />
+                {["peak", "integral", "multiplet", "reference"].includes(t) ? (
+                  <NmrToolIcon kind={t as NmrIconKind} size={18} />
+                ) : (
+                  <Icon size={18} />
+                )}
               </button>
             ))}
             <span />
             <button
-              title="Full spectrum"
+              data-tooltip="Full spectrum"
               aria-label="Full spectrum"
               onClick={full}
             >
               <Maximize2 size={17} />
             </button>
             <button
-              title="Previous view · Shift Left"
+              data-tooltip="Previous view · Shift Left"
               aria-label="Previous view"
               onClick={previousView}
             >
               <ArrowLeft size={17} />
             </button>
             <button
-              title="Increase height"
+              data-tooltip="Increase height"
               aria-label="Increase height"
               onClick={() => gain(1.1)}
             >
-              <Plus size={17} />
+              <NmrToolIcon kind="increase" size={18} />
             </button>
             <button
-              title="Decrease height"
+              data-tooltip="Decrease height"
               aria-label="Decrease height"
               onClick={() => gain(1 / 1.1)}
             >
-              <Minus size={17} />
+              <NmrToolIcon kind="decrease" size={18} />
             </button>
           </div>
         )}
@@ -3633,8 +3922,8 @@ export default function App() {
                     {panel === "phase" ? (
                       <>
                         <p className="panel-description">
-                          Adjust the phase to make peaks absorptive. Preview the
-                          result, then apply.
+                          Drag the sliders to see phase changes live, then
+                          apply.
                         </p>
                         {!active.data.imag && !active.fid && (
                           <p className="inline-warning">
