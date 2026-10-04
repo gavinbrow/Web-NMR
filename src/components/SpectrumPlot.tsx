@@ -592,6 +592,32 @@ export function SpectrumPlot(p: Props) {
       }
     return best;
   }
+  const regionLabelPositions = new Map<string, { x: number; lane: number }>();
+  const labelLanes: [number, number][][] = [[], [], []];
+  for (const region of [...(p.regions ?? [])].sort(
+    (a, b) => Number(!!b.selected) - Number(!!a.selected),
+  )) {
+    if (
+      Math.max(region.from, region.to) < v[1] ||
+      Math.min(region.from, region.to) > v[0]
+    )
+      continue;
+    const width = Math.min(pw - 12, region.label.length * 6 + 8);
+    const x = Math.max(
+      pad.l + 3,
+      Math.min(
+        pad.l + pw - width,
+        Math.min(xPixel(region.from), xPixel(region.to)) + 4,
+      ),
+    );
+    const lane = labelLanes.findIndex((intervals) =>
+      intervals.every(([a, b]) => x + width + 5 < a || x > b + 5),
+    );
+    if (lane >= 0) {
+      labelLanes[lane].push([x, x + width]);
+      regionLabelPositions.set(region.id ?? region.label, { x, lane });
+    }
+  }
   const instruction = isFid
     ? "FID · real time signal"
     : {
@@ -796,6 +822,9 @@ export function SpectrumPlot(p: Props) {
             {p.regions.map((region) => {
               const left = Math.min(xPixel(region.from), xPixel(region.to));
               const width = Math.abs(xPixel(region.from) - xPixel(region.to));
+              const labelPosition = regionLabelPositions.get(
+                region.id ?? region.label,
+              );
               return (
                 <g key={region.id ?? region.label} data-region-id={region.id}>
                   <rect
@@ -833,14 +862,16 @@ export function SpectrumPlot(p: Props) {
                       />
                     </>
                   )}
-                  <text
-                    x={left + 4}
-                    y={pad.t + ph - 8}
-                    fontSize={10}
-                    fill={region.color}
-                  >
-                    {region.label}
-                  </text>
+                  {labelPosition && (
+                    <text
+                      x={labelPosition.x}
+                      y={pad.t + ph - 8 - labelPosition.lane * 13}
+                      fontSize={10}
+                      fill={region.color}
+                    >
+                      {region.label}
+                    </text>
+                  )}
                 </g>
               );
             })}
