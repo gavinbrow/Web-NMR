@@ -275,8 +275,12 @@ export function SpectrumPlot(p: Props) {
         // Retain the saved intensity axis instead of refitting native documents
         // to the highest peak. Display gain remains a reversible multiplier.
         const range = nativeMax - nativeMin;
-        base = pad.t + ph * (1 + nativeMin / range);
-        scale = (ph / range) * s.gain * p.gain;
+        const signalHeight = Math.max(
+          30,
+          ph - (p.showIntegrals && a.integrals && s.integrals.length ? 48 : 0),
+        );
+        base = pad.t + signalHeight * (1 + nativeMin / range);
+        scale = (signalHeight / range) * s.gain * p.gain;
       }
       const horizontalOffset =
         p.mode === "stack" ? i * a.stackHorizontalOffset : 0;
@@ -294,6 +298,8 @@ export function SpectrumPlot(p: Props) {
     p.mode,
     p.normalization,
     p.component,
+    p.showIntegrals,
+    a.integrals,
     p.gain,
     a.stackSpacing,
     a.stackHorizontalOffset,
