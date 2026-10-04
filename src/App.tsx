@@ -796,6 +796,33 @@ export default function App() {
     kineticSources.find((s) => s.id === (activeStackId ?? kinSeriesSource)) ??
     kineticSources[0];
   const kineticSpectra = kineticSource.spectra;
+  const gainMembers =
+    tab === "Kinetics" && kinView === "spectra"
+      ? kineticSpectra
+      : mode === "single"
+        ? active
+          ? [active]
+          : []
+        : activeStack
+          ? stackMembers
+          : spectra;
+  const visibleGainMembers = gainMembers.filter(
+    (s) => s.visible && !s.twoD && s.nucleus === active?.nucleus,
+  );
+  const selectedGainMembers = visibleGainMembers.filter((s) =>
+    selected.includes(s.id),
+  );
+  const gainTargets = selectedGainMembers.length
+    ? selectedGainMembers
+    : visibleGainMembers;
+  const gainValue =
+    (gainTargets.find((s) => s.id === active?.id) ?? gainTargets[0])?.gain ?? 1;
+  const gainLabel =
+    gainTargets.length === 1
+      ? "Individual display gain"
+      : selectedGainMembers.length
+        ? "Selected traces display gain"
+        : "All traces display gain";
   const activeProperties = useMemo(
     () => ({ ...properties, ...active?.properties }),
     [properties, active?.properties],
@@ -2167,16 +2194,23 @@ export default function App() {
       twoDIntensity.current?.(factor);
       return;
     }
-    if (mode === "single")
+    if (mode === "single" && !(tab === "Kinetics" && kinView === "spectra"))
       setPlotGain((v) => Math.max(0.01, Math.min(100, v * factor)));
-    else if (active)
-      setSpectra((a) =>
-        a.map((s) =>
-          s.id === active.id
-            ? { ...s, gain: Math.max(0.01, Math.min(100, s.gain * factor)) }
-            : s,
-        ),
-      );
+    else changeTraceGain(factor);
+  }
+  function changeTraceGain(factor: number, reset = false) {
+    if (busy || !Number.isFinite(factor) || factor <= 0) return;
+    const ids = new Set(gainTargets.map((s) => s.id));
+    setSpectra((all) =>
+      all.map((s) =>
+        ids.has(s.id)
+          ? {
+              ...s,
+              gain: reset ? 1 : Math.max(0.01, Math.min(100, s.gain * factor)),
+            }
+          : s,
+      ),
+    );
   }
   function duplicate() {
     if (!active || busy) return;
@@ -2947,6 +2981,8 @@ export default function App() {
     tab,
     kinPicking,
     kinSettingsOpen,
+    kinView,
+    kineticSpectra,
   ]);
   const processActions = (
     <>
@@ -5598,36 +5634,22 @@ export default function App() {
                       />
                     </Field>
                     <NumberField
-                      label="Individual display gain"
-                      value={active.gain}
+                      label={gainLabel}
+                      value={gainValue}
                       min={0.01}
                       max={100}
                       step={0.1}
-                      onChange={(n) =>
-                        setSpectra((a) =>
-                          a.map((s) =>
-                            s.id === active.id
-                              ? { ...s, gain: Math.max(0.01, Math.min(100, n)) }
-                              : s,
-                          ),
-                        )
-                      }
+                      onChange={(n) => changeTraceGain(n / gainValue)}
                     />
                     <input
-                      aria-label="Individual trace gain"
+                      aria-label={gainLabel}
                       type="range"
                       min=".1"
                       max="5"
                       step=".1"
-                      value={active.gain}
+                      value={gainValue}
                       onChange={(e) =>
-                        setSpectra((a) =>
-                          a.map((s) =>
-                            s.id === active.id
-                              ? { ...s, gain: Number(e.target.value) }
-                              : s,
-                          ),
-                        )
+                        changeTraceGain(Number(e.target.value) / gainValue)
                       }
                     />
                     <Field label="Trace color">
@@ -5655,13 +5677,7 @@ export default function App() {
                       </button>
                       <button
                         className="secondary"
-                        onClick={() =>
-                          setSpectra((a) =>
-                            a.map((s) =>
-                              s.id === active.id ? { ...s, gain: 1 } : s,
-                            ),
-                          )
-                        }
+                        onClick={() => changeTraceGain(1, true)}
                       >
                         Reset
                       </button>
