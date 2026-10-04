@@ -1,0 +1,130 @@
+.two-d-processing {
+  position: fixed;
+  right: 64px;
+  top: 180px;
+  width: min(315px, calc(100vw - 30px));
+  max-height: calc(100vh - 210px);
+  display: flex;
+  flex-direction: column;
+  z-index: 35;
+  color: #dbe1eb;
+  background: #242830;
+  border: 1px solid #505a67;
+  border-radius: 6px;
+  box-shadow: 0 8px 28px #0006;
+  resize: both;
+  overflow: hidden;
+  min-width: 250px;
+  min-height: 240px;
+  font-size: 12px;
+}
+.two-d-processing header,
+.two-d-processing footer {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  gap: 8px;
+  border-bottom: 1px solid #444b57;
+  flex: none;
+}
+.two-d-processing header button {
+  margin-left: auto;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+.two-d-processing footer {
+  border-bottom: 0;
+  border-top: 1px solid #444b57;
+  justify-content: flex-end;
+}
+.two-d-processing-body {
+  padding: 12px;
+  overflow: auto;
+  display: grid;
+  gap: 12px;
+}
+.two-d-processing-body small {
+  color: #aab5c3;
+  line-height: 1.5;
+}
+.two-d-processing .field {
+  margin: 0;
+}
+.two-d-processing .field input,
+.two-d-processing .field select {
+  width: 100%;
+  box-sizing: border-box;
+}
+.two-d-axis-tabs,
+.two-d-processing-pair {
+  display: flex;
+  gap: 6px;
+}
+.two-d-processing-pair > * {
+  width: 50%;
+}
+.two-d-axis-tabs button {
+  flex: 1;
+  padding: 7px;
+  border: 1px solid #505a67;
+  border-radius: 4px;
+  background: #303640;
+  color: #cbd4e1;
+  cursor: pointer;
+}
+.two-d-axis-tabs .selected {
+  border-color: #e06a84;
+  background: #61313f;
+  color: white;
+}
+.two-d-processing .checkbox-field {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+}
+.two-d-processing input[type="range"] {
+  accent-color: #1689e9;
+}
+.two-d-processing-error {
+  margin: 0;
+  color: #ffb9bf;
+  line-height: 1.45;
+}
+.two-d-processing-status {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.two-d-reference {
+  position: fixed;
+  right: 64px;
+  top: 180px;
+  width: 280px;
+  z-index: 36;
+  padding: 13px;
+  background: #242830;
+  color: #dbe1eb;
+  border: 1px solid #505a67;
+  border-radius: 6px;
+  box-shadow: 0 8px 28px #0006;
+  font-size: 12px;
+}
+.two-d-reference h3 {
+  margin: 0 0 14px;
+}
+.two-d-reference footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.two-d-reference .field {
+  margin-bottom: 12px;
+}
+@media (max-height: 550px) {
+  .two-d-processing {
+    top: 110px;
+    max-height: calc(100vh - 130px);
+  }
+}

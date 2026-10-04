@@ -79,3 +79,33 @@ export function processBaselineAsync(
 ): Promise<import("./numerics").BaselineProcessingResult> {
   return request("processBaseline", { spectrum });
 }
+
+/** Avoid cloning the mutable display matrix when an immutable processing source exists. */
+function twoDJob(spectrum: Spectrum): Spectrum {
+  return {
+    ...spectrum,
+    twoD: spectrum.twoDOriginal ? undefined : spectrum.twoD,
+    twoDOriginal: spectrum.twoDOriginal
+      ? {
+          ...spectrum.twoDOriginal,
+          referenceOffsetF1:
+            spectrum.twoD?.referenceOffsetF1 ??
+            spectrum.twoDOriginal.referenceOffsetF1,
+        }
+      : undefined,
+    peaks: [],
+    integrals: [],
+    multiplets: [],
+  };
+}
+export function processTwoDAsync(
+  spectrum: Spectrum,
+): Promise<import("./twoDProcessing").TwoDProcessingResult> {
+  return request("processTwoD", { spectrum: twoDJob(spectrum) });
+}
+export function autoPhaseTwoDAsync(
+  spectrum: Spectrum,
+  axis: "F2" | "F1",
+): Promise<{ ph0: number; ph1: number }> {
+  return request("phaseTwoD", { spectrum: twoDJob(spectrum), axis });
+}

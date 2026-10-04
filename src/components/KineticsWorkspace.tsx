@@ -23,6 +23,7 @@ import type {
 } from "../features/kinetics";
 import { NmrToolIcon } from "./NmrToolIcon";
 import { KineticsChart } from "./KineticsChart";
+import { generateTimePoints, type TimeFill } from "../features/timePoints";
 import "./KineticsWorkspace.css";
 
 interface Props {
@@ -49,7 +50,11 @@ interface Props {
   fitError: string;
   onFit: () => void;
   onExport: () => void;
+  onExportImages: () => void;
   onTimeChange: (id: string, time: number | undefined) => void;
+  timeFill: TimeFill;
+  onTimeFillChange: (settings: TimeFill) => void;
+  onFillTimes: () => void;
   onIncludeChange: (id: string) => void;
   onSelect: (id: string) => void;
   view: "curve" | "spectra";
@@ -292,9 +297,17 @@ export function KineticsWorkspace(p: Props) {
             className="secondary"
             onClick={p.onExport}
             aria-label="Export kinetics data"
-            data-tooltip="Export all target measurements, settings and fits as CSV"
+            data-tooltip="Download an Excel report with figures and first- and second-order plots"
           >
             <Download size={14} />
+          </button>
+          <button
+            className="secondary"
+            onClick={p.onExportImages}
+            aria-label="Export kinetics figures"
+            data-tooltip="Download spectra, kinetics and both order plots as high-resolution PNG images"
+          >
+            <NmrToolIcon kind="png" size={17} />
           </button>
           <button
             ref={setupButton}
@@ -606,6 +619,103 @@ export function KineticsWorkspace(p: Props) {
             </button>
           </div>
           <div className="kinetics-setup-body">
+            <section>
+              <h3>Fill time points</h3>
+              <label className="field">
+                <span>Pattern</span>
+                <select
+                  aria-label="Time point pattern"
+                  value={p.timeFill.pattern}
+                  onChange={(e) =>
+                    p.onTimeFillChange({
+                      ...p.timeFill,
+                      pattern: e.target.value as TimeFill["pattern"],
+                    })
+                  }
+                >
+                  <option value="doubling">1, 2, 4, 8…</option>
+                  <option value="linear">Equal intervals</option>
+                  <option value="custom">Custom times</option>
+                </select>
+              </label>
+              {p.timeFill.pattern === "custom" ? (
+                <label className="field">
+                  <span>Times (min), in spectrum order</span>
+                  <input
+                    aria-label="Custom time points"
+                    value={p.timeFill.custom}
+                    placeholder="0, 1, 2, 4, 8"
+                    onChange={(e) =>
+                      p.onTimeFillChange({
+                        ...p.timeFill,
+                        custom: e.target.value,
+                      })
+                    }
+                  />
+                </label>
+              ) : (
+                <>
+                  <NumericInput
+                    label={
+                      p.timeFill.pattern === "doubling"
+                        ? "First nonzero time (min)"
+                        : "Starting time (min)"
+                    }
+                    value={p.timeFill.start}
+                    min={0}
+                    onChange={(start) =>
+                      p.onTimeFillChange({ ...p.timeFill, start })
+                    }
+                  />
+                  {p.timeFill.pattern === "linear" ? (
+                    <NumericInput
+                      label="Interval (min)"
+                      value={p.timeFill.step}
+                      min={0.001}
+                      onChange={(step) =>
+                        p.onTimeFillChange({ ...p.timeFill, step })
+                      }
+                    />
+                  ) : (
+                    <label className="checkbox-field">
+                      <input
+                        type="checkbox"
+                        checked={p.timeFill.includeZero}
+                        onChange={(e) =>
+                          p.onTimeFillChange({
+                            ...p.timeFill,
+                            includeZero: e.target.checked,
+                          })
+                        }
+                      />
+                      Start with a zero-time spectrum
+                    </label>
+                  )}
+                </>
+              )}
+              <p className="kinetics-setup-note">
+                {(() => {
+                  try {
+                    return (
+                      generateTimePoints(p.spectra.length, p.timeFill)
+                        .slice(0, 8)
+                        .join(", ") +
+                      (p.spectra.length > 8 ? "…" : "") +
+                      " min"
+                    );
+                  } catch (e) {
+                    return e instanceof Error ? e.message : "Check times";
+                  }
+                })()}
+              </p>
+              <button
+                className="secondary full-width"
+                data-tooltip="Replace times for this series in the displayed spectrum order"
+                onClick={p.onFillTimes}
+              >
+                Fill all time points
+              </button>
+            </section>
             <section>
               <h3>Time series</h3>
               <label className="field">

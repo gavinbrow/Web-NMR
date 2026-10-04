@@ -8,13 +8,18 @@ import {
   type ImportEntry,
   type ImportResult,
   type Spectrum,
+  type SpectrumStack,
 } from "../model";
-import { processSpectrum } from "./numerics";
 import {
-  maximumProjection,
-  processRawTwoDMagnitude,
-  readProcessedTwoD,
-} from "./twoD";
+  processSpectrum,
+  correctDigitalFilter,
+  nextPowerOfTwo,
+  brukerPhaseCorrection,
+  applyPhase,
+} from "./numerics";
+import { importMnovaJson, isMnovaJsonDataset } from "./mnovaJson";
+import { transformRawTwoD } from "./twoDProcessing";
+import { maximumProjection, readRawTwoD, readProcessedTwoD } from "./twoD";
 
 type Params = Record<string, string | number>;
 const decoder = new TextDecoder();
@@ -23,6 +28,23 @@ const basename = (path: string) => path.split("/").pop() || path;
 const dirname = (path: string) =>
   path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
 const join = (a: string, b: string) => (a ? `${a}/${b}` : b);
+/** Bruker uses the first title line and all following lines as the comment. */
+export function parseBrukerTitle(text: string): Params {
+  const normalized = text
+    .replace(/^\uFEFF/, "")
+    .replace(/\r\n?/g, "\n")
+    .trimEnd();
+  const lines = normalized.split("\n");
+  const title = (lines[0] || "").trim().slice(0, 100_000);
+  const comments = lines.slice(1).join("\n").trimEnd().slice(0, 100_000);
+  return {
+    title,
+    comments,
+    Title: title,
+    Comment: comments,
+    sourceTitle: normalized.slice(0, 100_000),
+  };
+}
 export function parseBrukerParameters(text: string): Params {
   const p: Params = {};
   for (const match of text.matchAll(/^##\$([\w]+)\s*=\s*([^\r\n]*)/gm)) {
@@ -130,6 +152,9 @@ function readProcessed(
     order = number(p, "BYTORDP");
   const real = binary(realFile, size, order, type, scale),
     imag = imagFile ? binary(imagFile, size, order, type, scale) : undefined;
+  // TopSpin's saved 1i is conjugated relative to our positive-exponential FFT.
+  // Preserve 1r exactly and convert the imaginary sign for subsequent phase edits.
+  if (imag) for (let i = 0; i < imag.length; i++) imag[i] = -imag[i];
   const x = new Float64Array(size);
   for (let i = 0; i < size; i++) x[i] = offset - (i * sw) / (size * sf);
   return { x, real, imag };
@@ -298,11 +323,14 @@ function readJcamp(text: string): { data: ComplexData; parameters: Params } {
 
 export function importEntries(input: ImportEntry[]): ImportResult {
   const spectra: Spectrum[] = [],
+    stacks: SpectrumStack[] = [],
     warnings: string[] = [],
     entries: ImportEntry[] = [];
   let total = 0;
+  let importedView: [number, number] | undefined;
+  let importedName: string | undefined;
   for (const entry of input) {
-    if (/\.zip$/i.test(entry.path)) {
+    if (/\.(zip|mnjs)$/i.test(entry.path)) {
       let expandedBytes = 0;
       const expanded = unzipSync(new Uint8Array(entry.data), {
         filter: (file) => {
@@ -320,7 +348,10 @@ export function importEntries(input: ImportEntry[]): ImportResult {
       });
       for (const [path, data] of Object.entries(expanded))
         if (!path.endsWith("/"))
-          entries.push({ path, data: data.slice().buffer as ArrayBuffer });
+          entries.push({
+            path: /\.mnjs$/i.test(entry.path) ? `${entry.path}/${path}` : path,
+            data: data.slice().buffer as ArrayBuffer,
+          });
     } else entries.push(entry);
   }
   const files = new Map<string, ArrayBuffer>();
@@ -341,6 +372,27 @@ export function importEntries(input: ImportEntry[]): ImportResult {
     }
     files.set(path, entry.data);
   }
+  for (const [path, buffer] of files) {
+    if (!/\.json$/i.test(path) || !isMnovaJsonDataset(buffer)) continue;
+    if (
+      path.endsWith("/data.json") ||
+      path.includes("/pages/") ||
+      path.includes("/items/")
+    )
+      continue;
+    try {
+      const imported = importMnovaJson(files, path);
+      spectra.push(...imported.spectra);
+      warnings.push(...imported.warnings);
+      stacks.push(...(imported.stacks || []));
+      importedView ??= imported.view;
+      importedName ??= imported.projectName;
+    } catch (e) {
+      warnings.push(
+        `${basename(path)}: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
   const params = (path: string) =>
     files.has(path)
       ? parseBrukerParameters(decoder.decode(files.get(path)))
@@ -348,19 +400,10 @@ export function importEntries(input: ImportEntry[]): ImportResult {
   const titleMetadata = (root: string, processingPath?: string): Params => {
     const buffer =
       (processingPath && files.get(join(processingPath, "title"))) ||
-      files.get(join(root, "title"));
+      files.get(join(root, "title")) ||
+      files.get(join(root, "pdata/1/title"));
     if (!buffer) return {};
-    const lines = decoder
-      .decode(buffer)
-      .replace(/^\uFEFF/, "")
-      .replace(/\r\n?/g, "\n")
-      .trim()
-      .split("\n");
-    return {
-      title: (lines[0] || "").slice(0, 100_000),
-      comments: lines.slice(1).join("\n").slice(0, 100_000),
-      sourceTitle: lines.join("\n").slice(0, 100_000),
-    };
+    return parseBrukerTitle(decoder.decode(buffer));
   };
   const roots = new Set<string>();
   for (const path of files.keys()) {
@@ -436,7 +479,7 @@ export function importEntries(input: ImportEntry[]): ImportResult {
             throw new Error(
               "Raw ser requires acqus and acqu2s, or upload processed 2rr + procs + proc2s. No data were flattened.",
             );
-          twoD = processRawTwoDMagnitude(
+          const raw = readRawTwoD(
             ser,
             acquisition,
             acquisitionF1,
@@ -444,8 +487,25 @@ export function importEntries(input: ImportEntry[]): ImportResult {
             p1,
             experiment,
           );
+          const f2 = defaultRecipe(),
+            f1 = defaultRecipe();
+          f2.window = f1.window = "none";
+          f2.pivotPpm = raw.carrierPpmF2;
+          f1.pivotPpm = raw.carrierPpmF1;
+          twoD = transformRawTwoD(
+            raw,
+            p2 ? number(p2, "SF", true) : number(acquisition, "SFO1", true),
+            {
+              transform: true,
+              digitalFilter: true,
+              magnitude: true,
+              reconstructImaginary: false,
+              f2,
+              f1,
+            },
+          );
           warnings.push(
-            `${label}: raw ${twoD.acquisitionMode} transformed as a 2D magnitude spectrum. Peak signs and phase-sensitive intensities are not preserved; use processed 2rr for absorption contours.`,
+            `${label}: raw ${twoD.acquisitionMode} transformed as a 2D magnitude spectrum. Peak signs and phase-sensitive intensities are not preserved; use processed 2rr for absorption contours.${twoD.acquisitionMode === "QF" ? " QF has no acquired indirect quadrature and retains mirrored F1 responses." : ""}`,
           );
         }
         const frequency = p2
@@ -467,6 +527,12 @@ export function importEntries(input: ImportEntry[]): ImportResult {
           dimensions: 2,
           projection: "F2 maximum absolute intensity, retaining sign",
           twoDProcessing: twoD.source,
+          ...(planePath
+            ? {
+                imaginaryConvention:
+                  "Bruker 2ir→imagF2 and 2ri→imagF1 conjugated to positive-FFT convention; real2rr and double-imaginary2ii unchanged",
+              }
+            : {}),
         };
         const spectrum = createSpectrum(
           label,
@@ -478,10 +544,28 @@ export function importEntries(input: ImportEntry[]): ImportResult {
           spectra.length,
         );
         spectrum.twoD = twoD;
+        spectrum.twoDOriginal = twoD;
+        const ser = files.get(join(root, "ser"));
+        if (ser && acquisition && acquisitionF1) {
+          try {
+            spectrum.twoDRaw = readRawTwoD(
+              ser,
+              acquisition,
+              acquisitionF1,
+              p2,
+              p1,
+              experiment,
+            );
+          } catch (e) {
+            warnings.push(
+              `${label}: 2D spectrum retained; raw reprocessing source unavailable: ${e instanceof Error ? e.message : String(e)}`,
+            );
+          }
+        }
         spectrum.history.push(
           planePath
             ? "Imported processed 2D matrix; vendor phase and baseline preserved"
-            : "Raw States/States-TPPI digital filter, per-dimension FT and magnitude",
+            : "Raw 2D quadrature, digital filter, per-dimension FT and magnitude",
         );
         spectra.push(spectrum);
         if (processedPaths.length > 1)
@@ -501,16 +585,43 @@ export function importEntries(input: ImportEntry[]): ImportResult {
       const fidFile = files.get(join(root, "fid"));
       let raw: { fid: FidData; frequency: number } | undefined;
       if (fidFile) {
-        if (!a) throw new Error("Raw fid requires matching acqus.");
-        raw = readFid(fidFile, a, p);
+        try {
+          if (!a) throw new Error("Raw fid requires matching acqus.");
+          raw = readFid(fidFile, a, p);
+        } catch (e) {
+          if (!processed) throw e;
+          warnings.push(
+            `${label}: processed spectrum retained; raw reprocessing source unavailable: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
       }
       if (!processed && !raw) continue;
-      const metadata = {
+      const metadata: Params = {
         ...(a || {}),
         ...(p || {}),
         importPath: root,
         processingPath: processed ? dirname(processed) : "raw",
-        digitalFilterMethod: "integer GRPDLY truncation with tail compensation",
+        digitalFilterMethod:
+          "full GRPDLY centered-frequency shift with tail compensation",
+        processingSource: processed
+          ? "Vendor processed 1r/1i; existing phase and baseline retained"
+          : "Raw FID",
+        ...(p
+          ? {
+              vendorPhase0Deg: Number(p?.PHC0) || 0,
+              vendorPhase1Deg: Number(p?.PHC1) || 0,
+              vendorBaselineParameters: [
+                "BC_mod",
+                "ABSF1",
+                "ABSF2",
+                "ABSG",
+                "BCFW",
+              ]
+                .filter((key) => p?.[key] !== undefined)
+                .map((key) => `${key}=${p![key]}`)
+                .join("; "),
+            }
+          : {}),
         ...titleMetadata(root, processed ? dirname(processed) : undefined),
       };
       const data = processed
@@ -520,6 +631,9 @@ export function importEntries(input: ImportEntry[]): ImportResult {
             p!,
           )
         : { x: new Float64Array(0), real: new Float64Array(0) };
+      if (processed && data.imag)
+        metadata.imaginaryConvention =
+          "Saved TopSpin 1i conjugated to positive-FFT convention; real 1r unchanged";
       const frequency = processed ? number(p!, "SF", true) : raw!.frequency;
       const s = createSpectrum(
         label,
@@ -540,10 +654,70 @@ export function importEntries(input: ImportEntry[]): ImportResult {
       if (!processed) {
         s.recipe.transform = true;
         s.recipe.pivotPpm = raw!.fid.carrierPpm;
+        if (p) {
+          const window = Number(p.WDW),
+            lb = Number(p.LB);
+          if (window === 0) s.recipe.window = "none";
+          else if (window === 1 && Number.isFinite(lb) && lb >= 0) {
+            s.recipe.window = "exponential";
+            s.recipe.lbHz = lb;
+          } else if (p.WDW !== undefined)
+            warnings.push(
+              `${label}: saved window WDW=${p.WDW} cannot be reproduced by the supported windows; no alternative apodization was substituted.`,
+            );
+          const count =
+            s.recipe.digitalFilter && Number.isFinite(raw!.fid.groupDelay)
+              ? correctDigitalFilter(raw!.fid).real.length
+              : raw!.fid.real.length;
+          const baseSize = nextPowerOfTwo(count),
+            factor = Number(p.SI) / baseSize;
+          if ([1, 2, 4, 8, 16, 32].includes(factor)) s.recipe.zeroFill = factor;
+          else if (p.SI !== undefined)
+            warnings.push(
+              `${label}: saved SI=${p.SI} cannot be matched by supported zero filling; using ${nextPowerOfTwo(count * s.recipe.zeroFill)} points.`,
+            );
+          s.metadata.rawProcessingParameters = `WDW=${p.WDW ?? "unknown"}; LB=${p.LB ?? "unknown"}; SI=${p.SI ?? "unknown"}; PHC0=${p.PHC0 ?? "unknown"}; PHC1=${p.PHC1 ?? "unknown"}`;
+        }
         s.original = processSpectrum(s);
-        s.data = s.original;
-        s.history.push("Raw FID transformed");
-      }
+        if (
+          p &&
+          Number.isFinite(Number(p.PHC0)) &&
+          Number.isFinite(Number(p.PHC1))
+        ) {
+          Object.assign(
+            s.recipe,
+            brukerPhaseCorrection(
+              s.original,
+              Number(p.PHC0),
+              Number(p.PHC1),
+              s.referenceOffset,
+            ),
+          );
+
+          s.metadata.machinePhaseImported = "true";
+          s.history.push(
+            "Applied saved Bruker PHC0/PHC1 with vendor grid convention",
+          );
+        }
+        // Keep the initial transformed source unphased so transform=false replay
+        // applies the stored recipe exactly once. Display data is a separate copy.
+        s.data = applyPhase(
+          {
+            x: s.original.x.slice(),
+            real: s.original.real.slice(),
+            imag: s.original.imag?.slice(),
+          },
+          s.recipe.ph0,
+          s.recipe.ph1,
+          s.recipe.pivotPpm - s.referenceOffset,
+        );
+        s.history.push(
+          "Raw FID transformed with imported source processing settings",
+        );
+      } else
+        s.history.push(
+          "Imported vendor-processed 1r/1i; saved phase and baseline retained without reapplying corrections",
+        );
       if (processedPaths.length > 1)
         warnings.push(
           `${label}: ${processedPaths.length} processing versions found; opened ${dirname(processed!)}.`,
@@ -593,14 +767,25 @@ export function importEntries(input: ImportEntry[]): ImportResult {
       );
     }
   }
-  for (const path of files.keys())
-    if (/\.(mnova|jdf)$/i.test(path))
+  for (const path of files.keys()) {
+    if (/\.mnova$/i.test(path))
+      warnings.push(
+        `${basename(path)}: native .mnova is a proprietary binary format. In Mnova 17 or later, use File → Save As → MestReNova JSON Document (.mnjs), then open that file here. This preserves stored processed traces and available raw FIDs. Older Mnova versions can export JCAMP-DX or ppm/intensity CSV.`,
+      );
+    else if (/\.jdf$/i.test(path))
       warnings.push(
         `${basename(path)}: this proprietary format is not supported. Upload Bruker experiment folders, ZIP, JCAMP-DX or ppm/intensity text.`,
       );
+  }
   if (!spectra.length && !warnings.length)
     warnings.push(
       "No supported spectrum found. Include fid + acqus, or 1r + procs, or ppm/intensity CSV.",
     );
-  return { spectra, warnings };
+  return {
+    spectra,
+    warnings,
+    ...(stacks.length ? { stacks } : {}),
+    ...(importedView ? { view: importedView } : {}),
+    ...(importedName ? { projectName: importedName } : {}),
+  };
 }

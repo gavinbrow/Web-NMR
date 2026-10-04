@@ -88,6 +88,16 @@ function project(): Project {
   };
 }
 describe("portable project", () => {
+  it("preserves machine-size32x zero filling and rejects unsupported factors", async () => {
+    const p = project();
+    p.spectra[0].recipe.zeroFill = 32;
+    expect(
+      (await decodeProject(await encodeProject(p))).spectra[0].recipe.zeroFill,
+    ).toBe(32);
+    p.spectra[0].recipe.zeroFill = 3;
+    await expect(encodeProject(p)).rejects.toThrow("processing parameters");
+  });
+
   it("round-trips original, processed and FID precision with complete analysis and display settings", async () => {
     const source = project(),
       result = await decodeProject(await encodeProject(source));
@@ -116,9 +126,15 @@ describe("portable project", () => {
   });
   it("preserves integral calibration and refuses corrupt or missing references", async () => {
     const p = project();
-    p.spectra[0].integralCalibration = { anchorId: "i", target: 3, tentative: true };
+    p.spectra[0].integralCalibration = {
+      anchorId: "i",
+      target: 3,
+      tentative: true,
+    };
     const result = await decodeProject(await encodeProject(p));
-    expect(result.spectra[0].integralCalibration).toEqual(p.spectra[0].integralCalibration);
+    expect(result.spectra[0].integralCalibration).toEqual(
+      p.spectra[0].integralCalibration,
+    );
     const files = unzipSync(await encodeProject(p));
     const manifest = JSON.parse(strFromU8(files["manifest.json"]));
     for (const calibration of [
@@ -129,7 +145,9 @@ describe("portable project", () => {
     ]) {
       manifest.spectra[0].integralCalibration = calibration;
       files["manifest.json"] = strToU8(JSON.stringify(manifest));
-      await expect(decodeProject(zipSync(files))).rejects.toThrow("calibration");
+      await expect(decodeProject(zipSync(files))).rejects.toThrow(
+        "calibration",
+      );
     }
   });
   it("saves unknown spectrometer frequency without inventing JCAMP acquisition metadata", async () => {

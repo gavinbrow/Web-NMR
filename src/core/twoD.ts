@@ -1,4 +1,4 @@
-import type { ComplexData, TwoDSpectrum } from "../model";
+import type { ComplexData, TwoDSpectrum, TwoDRawData } from "../model";
 import { correctDigitalFilter, fft, nextPowerOfTwo } from "./numerics";
 
 export type BrukerParams = Record<string, string | number>;
@@ -134,12 +134,19 @@ export function readProcessedTwoD(
           scale,
         )
       : undefined;
+  const conjugate = (buffer?: ArrayBuffer) => {
+    const plane = decode(buffer);
+    if (plane) for (let i = 0; i < plane.length; i++) plane[i] = -plane[i];
+    return plane;
+  };
   return {
     x,
     y,
     real: decode(files.rr)!,
-    imagF2: decode(files.ri),
-    imagF1: decode(files.ir),
+    // Bruker names the F2 component first. Conjugate each imaginary axis to
+    // the positive-FFT convention; two conjugations leave 2ii unchanged.
+    imagF2: conjugate(files.ir),
+    imagF1: conjugate(files.ri),
     imagBoth: decode(files.ii),
     width,
     height,
@@ -218,6 +225,102 @@ function rawAxis(
     frequency,
     spectralWidth,
     carrier,
+  };
+}
+
+/** Decode immutable, unwindowed acquired samples; stored F1 rows remain interleaved quadrature/echo pairs. */
+export function readRawTwoD(
+  buffer: ArrayBuffer,
+  f2: BrukerParams,
+  f1: BrukerParams,
+  procs?: BrukerParams,
+  proc2s?: BrukerParams,
+  experiment = "2D NMR",
+): TwoDRawData {
+  const mode = required(f1, "FnMODE");
+  if (![1, 4, 5, 6].includes(mode))
+    throw new Error(
+      `Raw 2D FnMODE ${mode} is unsupported; supported modes are QF, States, States-TPPI and Echo-Antiecho.`,
+    );
+  if (
+    ![1, 3].includes(required(f2, "AQ_mod")) ||
+    Number(f2.FnTYPE) === 2 ||
+    Number(f1.FnTYPE) === 2
+  )
+    throw new Error(
+      "2D processing requires uniform complex direct acquisition; NUS is unsupported.",
+    );
+  const td = required(f2, "TD", true),
+    height = required(f1, "TD", true),
+    type = required(f2, "DTYPA"),
+    order = required(f2, "BYTORDA"),
+    bytes = type === 2 ? 8 : 4;
+  if (
+    ![0, 2].includes(type) ||
+    ![0, 1].includes(order) ||
+    !Number.isInteger(td) ||
+    !Number.isInteger(height) ||
+    td % 2 ||
+    (mode !== 1 && height % 2)
+  )
+    throw new Error("Invalid raw 2D numeric format or quadrature row count.");
+  const width = td / 2;
+  dimensions(width, height);
+  if (width * height * 16 > MAX_COMPONENT_BYTES)
+    throw new Error("Raw 2D samples exceed the 160 MiB source limit.");
+  const stride = Math.ceil((td * bytes) / 1024) * 1024;
+  if (buffer.byteLength !== stride * height)
+    throw new Error(
+      "Raw 2D ser length does not match padded direct TD and indirect TD; partial acquisition is unsupported.",
+    );
+  const direct = rawAxis(f2, procs, width),
+    indirect = rawAxis(f1, proc2s, mode === 1 ? height : height / 2),
+    real = new Float64Array(width * height),
+    imag = new Float64Array(width * height),
+    view = new DataView(buffer);
+  for (let row = 0; row < height; row++)
+    for (let col = 0; col < width; col++) {
+      const at = row * stride + col * bytes * 2,
+        index = row * width + col;
+      real[index] =
+        bytes === 8
+          ? view.getFloat64(at, order === 0)
+          : view.getInt32(at, order === 0);
+      imag[index] =
+        bytes === 8
+          ? view.getFloat64(at + bytes, order === 0)
+          : view.getInt32(at + bytes, order === 0);
+      if (!Number.isFinite(real[index] + imag[index]))
+        throw new Error("Raw 2D contains non-finite samples.");
+    }
+  const groupDelay = Number(f2.GRPDLY);
+  if (!Number.isFinite(groupDelay) || groupDelay < 0)
+    throw new Error(
+      "Raw 2D source requires valid non-negative GRPDLY; legacy digital-filter metadata is not guessed.",
+    );
+  return {
+    real,
+    imag,
+    width,
+    height,
+    acquisitionMode:
+      mode === 1
+        ? "QF"
+        : mode === 4
+          ? "States"
+          : mode === 5
+            ? "States-TPPI"
+            : "Echo-Antiecho",
+    dwellSecondsF2: 1 / direct.spectralWidth,
+    dwellSecondsF1: 1 / indirect.spectralWidth,
+    spectralWidthHzF2: direct.spectralWidth,
+    spectralWidthHzF1: indirect.spectralWidth,
+    carrierPpmF2: direct.carrier,
+    carrierPpmF1: indirect.carrier,
+    groupDelay,
+    nucleusF1: String(f1.NUC1 || "unknown"),
+    frequencyF1: indirect.frequency,
+    experiment,
   };
 }
 /** Limited, explicit States/States-TPPI hypercomplex magnitude processing; no phase-sensitive claim. */

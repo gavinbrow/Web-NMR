@@ -13,6 +13,7 @@ import {
   reconcileTraceSources,
 } from "../features/twoDTraces";
 import "./TwoDPlot.css";
+import { snapTwoDPeak } from "../core/twoDProcessing";
 interface Props {
   spectrum: Spectrum;
   spectra?: Spectrum[];
@@ -25,6 +26,9 @@ interface Props {
   viewState?: TwoDView;
   onViewChange?: (view: TwoDView) => void;
   onImport1D?: () => void;
+  onReference?: (x: number, y: number) => void;
+  onBaselinePoint?: (x: number, y: number, value: number) => void;
+  baselinePoints?: { xPpm: number; yPpm: number; value: number }[];
 }
 export function initialTwoDView(s: Spectrum, saved?: TwoDView): TwoDView {
   if (validTwoDView(saved || s.twoDView)) return saved || s.twoDView!;
@@ -58,6 +62,9 @@ export function TwoDPlot({
   viewState,
   onViewChange,
   onImport1D,
+  onReference,
+  onBaselinePoint,
+  baselinePoints,
 }: Props) {
   const m = s.twoD!,
     host = useRef<HTMLDivElement>(null),
@@ -67,6 +74,27 @@ export function TwoDPlot({
   const [size, setSize] = useState({ w: 900, h: 600 }),
     [view, setView] = useState<TwoDView>(() => initialTwoDView(s, viewState)),
     [settings, setSettings] = useState(false);
+  const settingsPanel = useRef<HTMLDivElement>(null);
+  const settingsActions = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!settings) return;
+    const outside = (e: PointerEvent) => {
+      if (
+        !settingsPanel.current?.contains(e.target as Node) &&
+        !settingsActions.current?.contains(e.target as Node)
+      )
+        setSettings(false);
+    };
+    const escape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setSettings(false);
+    };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [settings]);
   const [drag, setDrag] = useState<{
       x: number;
       y: number;
@@ -367,6 +395,41 @@ export function TwoDPlot({
           return;
         e.currentTarget.setPointerCapture(e.pointerId);
         const p = pos(e);
+        if (tool === "reference" && !space.current) {
+          const peak = snapTwoDPeak(m, atX(p.x), atY(p.y), s.referenceOffset, [
+            ((xView[0] - xView[1]) * 8) / w,
+            ((yView[0] - yView[1]) * 8) / h,
+          ]);
+          if (peak) {
+            onReference?.(peak.xPpm, peak.yPpm);
+            setCursor({ x: px(peak.xPpm), y: py(peak.yPpm) });
+          }
+          return;
+        }
+        if (tool === "baseline" && !space.current) {
+          const nearest = (
+            axis: Float64Array,
+            value: number,
+            offset: number,
+          ) => {
+            let best = 0;
+            for (let i = 1; i < axis.length; i++)
+              if (
+                Math.abs(axis[i] + offset - value) <
+                Math.abs(axis[best] + offset - value)
+              )
+                best = i;
+            return best;
+          };
+          const column = nearest(m.x, atX(p.x), s.referenceOffset),
+            row = nearest(m.y, atY(p.y), m.referenceOffsetF1);
+          onBaselinePoint?.(
+            m.x[column] + s.referenceOffset,
+            m.y[row] + m.referenceOffsetF1,
+            m.real[row * m.width + column],
+          );
+          return;
+        }
         setDrag({
           ...p,
           endX: p.x,
@@ -376,7 +439,13 @@ export function TwoDPlot({
       }}
       onPointerMove={(e) => {
         const p = pos(e);
-        setCursor(inContour(local(e)) ? p : null);
+        if (tool === "reference" && inContour(local(e))) {
+          const peak = snapTwoDPeak(m, atX(p.x), atY(p.y), s.referenceOffset, [
+            ((xView[0] - xView[1]) * 8) / w,
+            ((yView[0] - yView[1]) * 8) / h,
+          ]);
+          setCursor(peak ? { x: px(peak.xPpm), y: py(peak.yPpm) } : p);
+        } else setCursor(inContour(local(e)) ? p : null);
         setDrag((d) => (d ? { ...d, endX: p.x, endY: p.y } : null));
       }}
       onPointerUp={() => {
@@ -576,6 +645,17 @@ export function TwoDPlot({
             <line x1={left} x2={left + w} y1={cursor.y} y2={cursor.y} />
           </g>
         )}
+        {baselinePoints?.map((p, i) => (
+          <circle
+            key={i}
+            cx={px(p.xPpm)}
+            cy={py(p.yPpm)}
+            r="4"
+            fill="#1689e9"
+            stroke="white"
+            data-ui="true"
+          />
+        ))}
         {drag && !drag.pan && (
           <rect
             data-ui="true"
@@ -590,7 +670,11 @@ export function TwoDPlot({
           />
         )}
       </svg>
-      <div className="two-d-actions" data-two-d-controls="true">
+      <div
+        ref={settingsActions}
+        className="two-d-actions"
+        data-two-d-controls="true"
+      >
         <button
           type="button"
           className="two-d-import-trace"
@@ -613,7 +697,21 @@ export function TwoDPlot({
         </button>
       </div>
       {settings && (
-        <div className="two-d-settings" data-two-d-controls="true">
+        <div
+          ref={settingsPanel}
+          className="two-d-settings"
+          data-two-d-controls="true"
+        >
+          <div className="two-d-inline">
+            <strong>2D display settings</strong>
+            <button
+              style={{ marginLeft: "auto" }}
+              aria-label="Close 2D settings"
+              onClick={() => setSettings(false)}
+            >
+              ×
+            </button>
+          </div>
           <label>
             Top 1D source ({s.nucleus})
             <select

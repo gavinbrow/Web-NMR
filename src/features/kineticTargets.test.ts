@@ -91,6 +91,15 @@ describe("multiple kinetic targets", () => {
       concentrationUnit: "mM",
       excludedIds: [],
       view: "spectra",
+      fitEnabled: true,
+      seriesSpectrumIds: [],
+      timeFill: {
+        pattern: "doubling",
+        start: 1,
+        step: 1,
+        includeZero: true,
+        custom: "",
+      },
     };
     const source = { ...createBlankProject("Two targets"), kinetics: config };
     const recovered = await decodeProject(await encodeProject(source));

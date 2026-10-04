@@ -1,14 +1,16 @@
 import { importEntries } from "./imports";
 import { autoPhase, processSpectrum, processWithBaseline } from "./numerics";
 import type { ImportEntry, Spectrum } from "../model";
+import { processTwoD, autoPhaseTwoD } from "./twoDProcessing";
 
 type Request =
   | { id: number; type: "import"; entries: ImportEntry[] }
   | {
       id: number;
-      type: "process" | "phase" | "processBaseline";
+      type: "process" | "phase" | "processBaseline" | "processTwoD";
       spectrum: Spectrum;
-    };
+    }
+  | { id: number; type: "phaseTwoD"; spectrum: Spectrum; axis: "F2" | "F1" };
 function outputBuffers(
   value: unknown,
   found = new Set<ArrayBuffer>(),
@@ -25,11 +27,15 @@ self.onmessage = (event: MessageEvent<Request>) => {
     const result =
       request.type === "import"
         ? importEntries(request.entries)
-        : request.type === "process"
-          ? processSpectrum(request.spectrum)
-          : request.type === "processBaseline"
-            ? processWithBaseline(request.spectrum)
-            : autoPhase(request.spectrum);
+        : request.type === "processTwoD"
+          ? processTwoD(request.spectrum)
+          : request.type === "phaseTwoD"
+            ? autoPhaseTwoD(request.spectrum, request.axis)
+            : request.type === "process"
+              ? processSpectrum(request.spectrum)
+              : request.type === "processBaseline"
+                ? processWithBaseline(request.spectrum)
+                : autoPhase(request.spectrum);
     self.postMessage(
       { id: request.id, result },
       { transfer: outputBuffers(result) },

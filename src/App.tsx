@@ -49,11 +49,15 @@ import type {
   ProcessingRecipe,
   KineticTarget,
   KineticsConfiguration,
+  TwoDProcessingRecipe,
+  TwoDSpectrum,
 } from "./model";
 import {
   importBrowserFiles,
   autoPhaseAsync,
   processBaselineAsync,
+  processTwoDAsync,
+  autoPhaseTwoDAsync,
 } from "./core/workerClient";
 import {
   detectPeaks,
@@ -91,9 +95,13 @@ import {
   exportAnalysisCSV,
   exportJCAMP,
   exportFigureSVG,
-  exportKineticTargetsCSV,
 } from "./features/export";
 import { measureKineticTargets } from "./features/kinetics";
+import {
+  defaultTimeFill,
+  generateTimePoints,
+  type TimeFill,
+} from "./features/timePoints";
 import {
   defaultProperties,
   type SpectrumProperties,
@@ -118,6 +126,11 @@ import { visibleGrid, contourPath } from "./features/contours";
 import { maximumProjection } from "./core/twoD";
 import { traceEnvelope, tracePath, f1Pixel } from "./features/twoDTraces";
 import { TwoDPlot, initialTwoDView } from "./components/TwoDPlot";
+import { defaultTwoDRecipe } from "./core/twoDProcessing";
+import {
+  TwoDProcessingDialog,
+  type TwoDPanel,
+} from "./components/TwoDProcessingDialog";
 import { NmrToolIcon, type NmrIconKind } from "./components/NmrToolIcon";
 import { KineticsWorkspace } from "./components/KineticsWorkspace";
 import type { KineticsMeasurementOptions } from "./features/kinetics";
@@ -504,6 +517,15 @@ export default function App() {
     [baselineCurve, setBaselineCurve] = useState<Spectrum["data"] | null>(null),
     [baselineLoading, setBaselineLoading] = useState(false),
     [baselineError, setBaselineError] = useState("");
+  const [twoDPanel, setTwoDPanel] = useState<TwoDPanel | null>(null);
+  const [twoDDraft, setTwoDDraft] = useState<TwoDProcessingRecipe | null>(null);
+  const [twoDPreview, setTwoDPreview] = useState<TwoDSpectrum | null>(null);
+  const [twoDReference, setTwoDReference] = useState<{
+    x: number;
+    y: number;
+    targetX: number;
+    targetY: number;
+  } | null>(null);
   const [navigatorWidth, setNavigatorWidth] = useState(184),
     [inspectorWidth, setInspectorWidth] = useState(280),
     [resultsHeight, setResultsHeight] = useState(198),
@@ -616,6 +638,8 @@ export default function App() {
   const setTargetProtons = (protons: number) => updateTarget({ protons });
   const [excluded, setExcluded] = useState<string[]>([]),
     [fitEnabled, setFitEnabled] = useState(false);
+  const [timeFill, setTimeFill] = useState<TimeFill>(defaultTimeFill);
+  const [kinSeriesIds, setKinSeriesIds] = useState<string[] | null>(null);
   function kineticsConfiguration(): KineticsConfiguration {
     return {
       targets: kinTargets,
@@ -628,6 +652,15 @@ export default function App() {
       concentrationUnit,
       excludedIds: excluded,
       view: kinView,
+      fitEnabled,
+      timeFill,
+      seriesSpectrumIds: (activeStack
+        ? activeStack.spectrumIds
+        : (kinSeriesIds ??
+          spectra
+            .filter((s) => !s.twoD && s.nucleus === active?.nucleus)
+            .map((s) => s.id))
+      ).filter((id) => spectra.some((s) => s.id === id)),
     };
   }
   function restoreKinetics(config?: KineticsConfiguration) {
@@ -655,7 +688,9 @@ export default function App() {
     setKinView(config?.view ?? "curve");
     setKinPicking(null);
     setKinSettingsOpen(false);
-    setFitEnabled(false);
+    setFitEnabled(config?.fitEnabled ?? false);
+    setTimeFill(config?.timeFill ?? defaultTimeFill());
+    setKinSeriesIds(config?.seriesSpectrumIds ?? null);
   }
   function addKineticTarget() {
     if (kinTargets.length >= 20) return;
@@ -1045,6 +1080,8 @@ export default function App() {
     concentrationUnit,
     excluded,
     kinView,
+    timeFill,
+    kinSeriesIds,
     plotGain,
     component,
     tab,
@@ -1080,6 +1117,11 @@ export default function App() {
       restoredComponent.current = null;
     }
   }, [documents.activeDocumentId, activeId, active?.revision]);
+  useEffect(() => {
+    setTwoDPanel(null);
+    setTwoDPreview(null);
+    setTwoDReference(null);
+  }, [documents.activeDocumentId, activeId]);
   useEffect(() => {
     phaseEpoch.current++;
     phaseLatest.current = null;
@@ -1266,7 +1308,10 @@ export default function App() {
   }
   function toolMode(t: Tool, p?: Panel) {
     if (busy) return;
-    if (active?.twoD && !["select", "zoom", "pan"].includes(t)) {
+    if (
+      active?.twoD &&
+      !["select", "zoom", "pan", "reference", "baseline"].includes(t)
+    ) {
       notify("Choose a 1D spectrum for this analysis tool.");
       return;
     }
@@ -1305,12 +1350,64 @@ export default function App() {
     const ticket = ++job.current;
     setBusy("Reading spectra…");
     try {
-      const portable = files.find((f) =>
-        f.name.toLowerCase().endsWith(".webnmr"),
+      const projectFiles = files.filter((f) =>
+        /\.(webnmr|mnjs)$/i.test(f.name),
       );
-      if (portable && !attachTo2DId) {
-        const p = await loadProject(portable);
-        if (ticket === job.current) openProjectDocument(p);
+      if (projectFiles.length && !attachTo2DId) {
+        let nextWorkspace = captureWorkspace();
+        const notes: string[] = [];
+        for (const file of projectFiles) {
+          let project: Project;
+          if (/\.webnmr$/i.test(file.name)) project = await loadProject(file);
+          else {
+            const imported = await importBrowserFiles([file]);
+            if (!imported.spectra.length)
+              throw new Error(
+                imported.warnings.join(" · ") ||
+                  "No spectra found in the Mnova JSON document.",
+              );
+            const first = imported.spectra[0];
+            project = {
+              ...createBlankProject(
+                imported.projectName || file.name.replace(/\.mnjs$/i, ""),
+              ),
+              spectra: imported.spectra,
+              activeId: first.id,
+              stacks: imported.stacks ?? [],
+              view: imported.view ?? extent(first.data, first.referenceOffset),
+            };
+            notes.push(...imported.warnings);
+          }
+          nextWorkspace = addDocument(
+            nextWorkspace,
+            createWorkspaceDocument(project),
+          );
+        }
+        const otherFiles = files.filter((f) => !projectFiles.includes(f));
+        if (otherFiles.length) {
+          const imported = await importBrowserFiles(otherFiles);
+          notes.push(...imported.warnings);
+          if (imported.spectra.length) {
+            const first = imported.spectra[0];
+            nextWorkspace = addDocument(
+              nextWorkspace,
+              createWorkspaceDocument({
+                ...createBlankProject(
+                  imported.projectName || "Imported spectra",
+                ),
+                spectra: imported.spectra,
+                activeId: first.id,
+                stacks: imported.stacks ?? [],
+                view:
+                  imported.view ?? extent(first.data, first.referenceOffset),
+              }),
+            );
+          }
+        }
+        if (ticket === job.current) {
+          setWorkspace(nextWorkspace);
+          setWarnings(notes);
+        }
         return;
       }
       const result = await importBrowserFiles(files);
@@ -1365,6 +1462,18 @@ export default function App() {
         notify(
           "High-resolution 1D attached · use 2D settings to choose each side trace",
         );
+        return;
+      }
+      if (result.projectName) {
+        const first = result.spectra[0];
+        openProjectDocument({
+          ...createBlankProject(result.projectName),
+          spectra: result.spectra,
+          activeId: first.id,
+          stacks: result.stacks ?? [],
+          view: result.view ?? extent(first.data, first.referenceOffset),
+        });
+        setWarnings(result.warnings);
         return;
       }
       const next = isDemo ? result.spectra : [...spectra, ...result.spectra];
@@ -1488,6 +1597,9 @@ export default function App() {
     job.current++;
     setBusy("");
     setPreview(null);
+    setTwoDPanel(null);
+    setTwoDPreview(null);
+    setTwoDReference(null);
     setBaselineOpen(false);
     baselineJob.current++;
     setBaselineCurve(null);
@@ -1505,7 +1617,56 @@ export default function App() {
     notify("Preview canceled");
   }
   async function autoPhase() {
-    if (!active || busy || active.twoD) return;
+    if (!active || busy) return;
+    if (active.twoD) {
+      const ticket = ++job.current;
+      setBusy("Finding 2D phase correction…");
+      try {
+        let recipe = {
+          ...(active.twoDRecipe ?? defaultTwoDRecipe(active)),
+          magnitude: false,
+        };
+        const f2 = await autoPhaseTwoDAsync(
+          { ...active, twoDRecipe: recipe },
+          "F2",
+        );
+        recipe = { ...recipe, f2: { ...recipe.f2, ...f2 } };
+        const f1 = await autoPhaseTwoDAsync(
+          { ...active, twoDRecipe: recipe },
+          "F1",
+        );
+        recipe = { ...recipe, f1: { ...recipe.f1, ...f1 } };
+        const result = await processTwoDAsync({
+          ...active,
+          twoDRecipe: recipe,
+        });
+        if (ticket !== job.current) return;
+        commit(
+          spectra.map((s) =>
+            s.id === active.id
+              ? {
+                  ...s,
+                  twoDOriginal: s.twoDOriginal ?? s.twoD,
+                  twoDRecipe: recipe,
+                  twoD: result.data,
+                  data: maximumProjection(result.data),
+                  revision: s.revision + 1,
+                  history: [...s.history, "2D auto phase · F2 and F1"],
+                }
+              : s,
+          ),
+        );
+        setTwoDPanel(null);
+        setTwoDPreview(null);
+        setWarnings(result.warnings);
+        notify("2D auto phase applied · review signed peaks");
+      } catch (e) {
+        if (ticket === job.current) notify(err(e));
+      } finally {
+        if (ticket === job.current) setBusy("");
+      }
+      return;
+    }
     if (panel === "phase") setInspectorOpen(false);
     phaseEpoch.current++;
     phaseLatest.current = null;
@@ -1529,7 +1690,11 @@ export default function App() {
     }
   }
   function openBaseline(manual = false) {
-    if (!active || busy || active.twoD) return;
+    if (!active || busy) return;
+    if (active.twoD) {
+      openTwoDProcessing("baseline", manual);
+      return;
+    }
     setTab("Processing");
     setPanel("baseline");
     setComponent("real");
@@ -2093,15 +2258,179 @@ export default function App() {
     );
     notify("Spectrum properties applied");
   }
-  function exportKinetics() {
-    exportKineticTargetsCSV(kineticSeries, kineticOptions, activeStack?.label);
+  function openTwoDProcessing(next: TwoDPanel, manual = false) {
+    if (!active?.twoD || busy) return;
+    let recipe = active.twoDRecipe ?? defaultTwoDRecipe(active);
+    if (next === "phase") recipe = { ...recipe, magnitude: false };
+    if (next === "baseline")
+      recipe = {
+        ...recipe,
+        f2: { ...recipe.f2, baseline: manual ? "manual" : "auto" },
+      };
+    if (next === "transform") recipe = { ...recipe, transform: true };
+    setTab("Processing");
+    setInspectorOpen(false);
+    setTwoDDraft(recipe);
+    setTwoDPanel(next);
+    setTool(manual ? "baseline" : "select");
+    setTwoDReference(null);
+  }
+  async function applyTwoDProcessing(recipe: TwoDProcessingRecipe) {
+    if (!active?.twoD || busy) return;
+    const ticket = ++job.current;
+    setBusy("Processing 2D spectrum…");
+    try {
+      const result = await processTwoDAsync({ ...active, twoDRecipe: recipe });
+      if (ticket !== job.current) return;
+      commit(
+        spectra.map((s) =>
+          s.id === active.id
+            ? {
+                ...s,
+                twoDOriginal: s.twoDOriginal ?? s.twoD,
+                twoDRecipe: recipe,
+                twoD: result.data,
+                data: maximumProjection(result.data),
+                revision: s.revision + 1,
+                history: [
+                  ...s.history,
+                  `2D processing · ${recipe.transform ? "Fourier transform · " : ""}F2 phase ${recipe.f2.ph0.toFixed(1)}°/${recipe.f2.ph1.toFixed(1)}° · F1 phase ${recipe.f1.ph0.toFixed(1)}°/${recipe.f1.ph1.toFixed(1)}° · baseline ${recipe.f2.baseline}/${recipe.f1.baseline}`,
+                ],
+              }
+            : s,
+        ),
+      );
+      setTwoDPanel(null);
+      setTwoDPreview(null);
+      setTool("select");
+      setWarnings(result.warnings);
+      notify("2D processing applied");
+    } catch (e) {
+      if (ticket === job.current) notify(err(e));
+    } finally {
+      if (ticket === job.current) setBusy("");
+    }
+  }
+  function applyTwoDReference() {
+    if (!active?.twoD || !twoDReference || busy) return;
+    const dx = twoDReference.targetX - twoDReference.x,
+      dy = twoDReference.targetY - twoDReference.y;
+    if (!Number.isFinite(dx + dy)) return;
+    const v = initialTwoDView(active);
+    changeActive((s) => ({
+      ...s,
+      referenceOffset: s.referenceOffset + dx,
+      twoD: { ...s.twoD!, referenceOffsetF1: s.twoD!.referenceOffsetF1 + dy },
+      twoDView: {
+        ...v,
+        xView: [v.xView[0] + dx, v.xView[1] + dx],
+        yView: [v.yView[0] + dy, v.yView[1] + dy],
+      },
+      twoDRecipe: s.twoDRecipe
+        ? {
+            ...s.twoDRecipe,
+            f2: {
+              ...s.twoDRecipe.f2,
+              pivotPpm: s.twoDRecipe.f2.pivotPpm + dx,
+              baselineAnchors: s.twoDRecipe.f2.baselineAnchors.map((a) => ({
+                ...a,
+                ppm: a.ppm + dx,
+              })),
+              baselineRegion: s.twoDRecipe.f2.baselineRegion?.map(
+                (v) => v + dx,
+              ) as [number, number] | undefined,
+              baselineExcludedRegions:
+                s.twoDRecipe.f2.baselineExcludedRegions?.map((r) => [
+                  r[0] + dx,
+                  r[1] + dx,
+                ]),
+            },
+            f1: {
+              ...s.twoDRecipe.f1,
+              pivotPpm: s.twoDRecipe.f1.pivotPpm + dy,
+              baselineAnchors: s.twoDRecipe.f1.baselineAnchors.map((a) => ({
+                ...a,
+                ppm: a.ppm + dy,
+              })),
+              baselineRegion: s.twoDRecipe.f1.baselineRegion?.map(
+                (v) => v + dy,
+              ) as [number, number] | undefined,
+              baselineExcludedRegions:
+                s.twoDRecipe.f1.baselineExcludedRegions?.map((r) => [
+                  r[0] + dy,
+                  r[1] + dy,
+                ]),
+            },
+            baselinePoints: s.twoDRecipe.baselinePoints?.map((p) => ({
+              ...p,
+              xPpm: p.xPpm + dx,
+              yPpm: p.yPpm + dy,
+            })),
+          }
+        : undefined,
+      history: [
+        ...s.history,
+        `2D reference · F2 ${dx.toFixed(5)} ppm · F1 ${dy.toFixed(5)} ppm`,
+      ],
+    }));
+    setTwoDReference(null);
+    setTool("select");
+    notify("Both 2D axes referenced");
+  }
+  async function exportKinetics(imagesOnly = false) {
+    if (busy) return;
+    const ticket = ++job.current;
+    setBusy("Creating kinetics report…");
+    try {
+      const {
+        buildKineticsWorkbook,
+        reportPlotSVG,
+        reportSpectraSVG,
+        svgReportImage,
+        downloadReport,
+        reportImagesZip,
+      } = await import("./features/kineticsReport");
+      const series = measureKineticTargets(
+        spectra,
+        kinTargets,
+        kineticOptions,
+        true,
+      );
+      const images = await Promise.all([
+        svgReportImage(reportPlotSVG(series), "kinetics"),
+        svgReportImage(reportPlotSVG(series, 1), "first-order"),
+        svgReportImage(reportPlotSVG(series, 2), "second-order"),
+        ...(kineticSpectra.length
+          ? [
+              svgReportImage(
+                reportSpectraSVG(kineticSpectra, series),
+                "spectra",
+              ),
+            ]
+          : []),
+      ]);
+      if (ticket !== job.current) return;
+      const label = (projectName || "kinetics").replace(/[\\/:*?"<>|]/g, "-");
+      downloadReport(
+        imagesOnly
+          ? reportImagesZip(images)
+          : buildKineticsWorkbook(projectName, series, kineticOptions, images),
+        label + (imagesOnly ? "-figures.zip" : "-kinetics.xlsx"),
+      );
+      notify(
+        imagesOnly
+          ? "Kinetics figures downloaded"
+          : "Excel kinetics report downloaded",
+      );
+    } catch (e) {
+      if (ticket === job.current) notify(err(e));
+    } finally {
+      if (ticket === job.current) setBusy("");
+    }
   }
   function enterTab(t: Tab) {
     if (busy) return;
-    if (
-      active?.twoD &&
-      (t === "Kinetics" || t === "Stack" || t === "Processing")
-    ) {
+    if (active?.twoD && (t === "Kinetics" || t === "Stack")) {
       notify(
         "Open a 1D spectrum for this workflow. 2D contour controls are on the spectrum.",
       );
@@ -2205,8 +2534,14 @@ export default function App() {
     () =>
       activeStack
         ? stackMembers
-        : spectra.filter((s) => !s.twoD && s.nucleus === active?.nucleus),
-    [spectra, activeStack, active?.nucleus],
+        : spectra.filter(
+            (s) =>
+              !s.twoD &&
+              (kinSeriesIds?.length
+                ? kinSeriesIds.includes(s.id)
+                : s.nucleus === active?.nucleus),
+          ),
+    [spectra, activeStack, active?.nucleus, kinSeriesIds],
   );
   const kineticProperties = useMemo(
     () => ({
@@ -2252,7 +2587,7 @@ export default function App() {
       concentrationUnit,
       excludedIds: excluded,
       spectrumIds: kineticSpectra.map((s) => s.id),
-      nucleus: active?.nucleus,
+      nucleus: kineticSpectra[0]?.nucleus ?? active?.nucleus,
     }),
     [
       kinFrom,
@@ -2351,6 +2686,10 @@ export default function App() {
       }
       if (e.shiftKey && k === "p") {
         e.preventDefault();
+        if (active?.twoD) {
+          openTwoDProcessing("phase");
+          return;
+        }
         enterTab("Processing");
         setPanel("phase");
         setInspectorOpen(true);
@@ -2462,8 +2801,7 @@ export default function App() {
           onClick={autoPhase}
           disabled={
             !active ||
-            !!active.twoD ||
-            (!active.data.imag && !active.fid) ||
+            (!active.twoD && !active.data.imag && !active.fid) ||
             !!busy
           }
         />
@@ -2473,6 +2811,10 @@ export default function App() {
           shortcut="⇧ P"
           active={panel === "phase" && inspectorOpen}
           onClick={() => {
+            if (active?.twoD) {
+              openTwoDProcessing("phase");
+              return;
+            }
             setPanel("phase");
             setInspectorOpen(true);
             if (active && !active.original.imag && active.fid)
@@ -2487,6 +2829,10 @@ export default function App() {
           label="Apodization"
           active={panel === "apodization"}
           onClick={() => {
+            if (active?.twoD) {
+              openTwoDProcessing("apodization");
+              return;
+            }
             setPanel("apodization");
             setInspectorOpen(true);
             if (active?.fid) setDraft((d) => ({ ...d, transform: true }));
@@ -2496,11 +2842,15 @@ export default function App() {
           icon={Activity}
           label="Fourier transform"
           onClick={() => {
+            if (active?.twoD) {
+              openTwoDProcessing("transform");
+              return;
+            }
             const r = { ...draft, transform: true };
             setDraft(r);
             void process("preview", r);
           }}
-          disabled={!active?.fid || !!busy}
+          disabled={(!active?.fid && !active?.twoDRaw) || !!busy}
         />
         <span className="group-label">FID & transform</span>
       </div>
@@ -2510,13 +2860,17 @@ export default function App() {
           label="Baseline correction"
           shortcut="B"
           onClick={() => openBaseline()}
-          disabled={!active || !!active.twoD || !!busy}
+          disabled={!active || !!busy}
         />
         <RibbonButton
           icon={Settings2}
           label="Manual baseline"
           active={tool === "baseline"}
-          onClick={manualBaseline}
+          onClick={() =>
+            active?.twoD
+              ? openTwoDProcessing("baseline", true)
+              : manualBaseline()
+          }
         />
         <span className="group-label">Baseline</span>
       </div>
@@ -2526,6 +2880,12 @@ export default function App() {
           label="Reset processing"
           onClick={() => {
             if (active) {
+              if (active.twoD) {
+                setTwoDDraft(defaultTwoDRecipe(active));
+                setTwoDPanel("phase");
+                setInspectorOpen(false);
+                return;
+              }
               const r = {
                 ...defaultRecipe(),
                 transform: active.recipe.transform,
@@ -2745,7 +3105,7 @@ export default function App() {
         className="hidden-input"
         type="file"
         multiple
-        accept=".zip,.csv,.tsv,.txt,.dx,.jdx,.jcamp,.webnmr,.fid,acqus,procs,1r,1i,fid"
+        accept=".zip,.csv,.tsv,.txt,.dx,.jdx,.jcamp,.webnmr,.mnova,.mnjs,.json,.fid,acqus,procs,1r,1i,fid"
         onChange={(e) => void openFiles(Array.from(e.target.files ?? []))}
       />
       <input
@@ -2763,7 +3123,7 @@ export default function App() {
         ref={projectInput}
         className="hidden-input"
         type="file"
-        accept=".webnmr"
+        accept=".webnmr,.mnjs,.mnova,.json"
         onChange={(e) => void openFiles(Array.from(e.target.files ?? []))}
       />
       <header className="topbar">
@@ -2947,7 +3307,7 @@ export default function App() {
               <RibbonButton
                 icon={Download}
                 label="Export kinetics"
-                onClick={() => exportKinetics()}
+                onClick={() => void exportKinetics()}
               />
               <span className="group-label">Analysis</span>
             </div>
@@ -3474,13 +3834,15 @@ export default function App() {
               activeStackId={activeStackId}
               activeId={activeId}
               seriesLabel={
-                activeStack?.label ?? `All ${active?.nucleus ?? "1D"} spectra`
+                activeStack?.label ??
+                `All ${kineticSpectra[0]?.nucleus ?? active?.nucleus ?? "1D"} spectra`
               }
               settings={kineticOptions}
               onSettingsChange={updateKineticSettings}
               onSeriesChange={(id) => {
                 const stack = stacks.find((s) => s.id === id);
                 setActiveStackId(stack?.id ?? null);
+                setKinSeriesIds(null);
                 setSelectedStackId(stack?.id ?? null);
                 if (stack && !stack.spectrumIds.includes(activeId))
                   setActiveId(stack.spectrumIds[0]);
@@ -3498,7 +3860,8 @@ export default function App() {
               fit={fitResult.fit}
               fitError={fitResult.error}
               onFit={() => setFitEnabled(true)}
-              onExport={exportKinetics}
+              onExport={() => void exportKinetics()}
+              onExportImages={() => void exportKinetics(true)}
               onTimeChange={(id, time) =>
                 setSpectra((all) =>
                   all.map((s) =>
@@ -3506,6 +3869,29 @@ export default function App() {
                   ),
                 )
               }
+              timeFill={timeFill}
+              onTimeFillChange={setTimeFill}
+              onFillTimes={() => {
+                try {
+                  const times = generateTimePoints(
+                    kineticSpectra.length,
+                    timeFill,
+                  );
+                  const mapping = new Map(
+                    kineticSpectra.map((s, i) => [s.id, times[i]]),
+                  );
+                  commit(
+                    spectra.map((s) =>
+                      mapping.has(s.id)
+                        ? { ...s, timeMinutes: mapping.get(s.id) }
+                        : s,
+                    ),
+                  );
+                  notify("Time points filled in spectrum order");
+                } catch (e) {
+                  notify(err(e));
+                }
+              }}
               onIncludeChange={(id) =>
                 setExcluded((all) =>
                   all.includes(id) ? all.filter((v) => v !== id) : [...all, id],
@@ -3674,7 +4060,9 @@ export default function App() {
                 {active.twoD ? (
                   <TwoDPlot
                     key={`${documents.activeDocumentId}:${active.id}`}
-                    spectrum={active}
+                    spectrum={
+                      twoDPreview ? { ...active, twoD: twoDPreview } : active
+                    }
                     spectra={spectra}
                     onImport1D={() => traceInput.current?.click()}
                     viewState={active.twoDView}
@@ -3691,6 +4079,30 @@ export default function App() {
                     exportRef={svgExport}
                     fullRef={twoDFull}
                     intensityRef={twoDIntensity}
+                    onReference={(x, y) => {
+                      setTwoDPanel(null);
+                      setTwoDPreview(null);
+                      setInspectorOpen(false);
+                      setTwoDReference({ x, y, targetX: x, targetY: y });
+                    }}
+                    onBaselinePoint={(xPpm, yPpm, value) =>
+                      setTwoDDraft((r) =>
+                        r
+                          ? {
+                              ...r,
+                              baselinePoints: [
+                                ...(r.baselinePoints ?? []),
+                                { xPpm, yPpm, value },
+                              ],
+                            }
+                          : r,
+                      )
+                    }
+                    baselinePoints={
+                      twoDPanel === "baseline"
+                        ? twoDDraft?.baselinePoints
+                        : undefined
+                    }
                   />
                 ) : (
                   <SpectrumPlot
@@ -4147,7 +4559,8 @@ export default function App() {
                 className={tool === t ? "active" : ""}
                 key={t}
                 disabled={
-                  !!active?.twoD && !["select", "zoom", "pan"].includes(t)
+                  !!active?.twoD &&
+                  !["select", "zoom", "pan", "reference"].includes(t)
                 }
                 aria-label={`${toolText[t]} tool`}
                 data-tooltip={`${toolText[t]}${key ? " (" + key + ")" : ""}`}
@@ -4521,7 +4934,7 @@ export default function App() {
                               }))
                             }
                           >
-                            {[1, 2, 4, 8].map((n) => (
+                            {[1, 2, 4, 8, 16, 32].map((n) => (
                               <option key={n} value={n}>
                                 {n}× points
                               </option>
@@ -5177,9 +5590,10 @@ export default function App() {
               ))}
             </ul>
             <p>
-              Supported here: Bruker 1D and processed 2D (including NOESY),
-              supported JCAMP-DX, CSV and TSV. Import the complete experiment
-              folder or ZIP, including pdata.
+              Supported here: Bruker 1D and 2D (including COSY and NOESY), Mnova
+              JSON documents (.mnjs), supported JCAMP-DX, CSV and TSV. Import
+              the complete experiment folder or ZIP, including pdata. Native
+              .mnova documents need a .mnjs copy saved from Mnova 17 or later.
             </p>
             <button className="primary" onClick={() => setWarnings([])}>
               Continue
@@ -5456,6 +5870,79 @@ export default function App() {
             notify("Default spectrum properties updated");
           }}
         />
+      )}
+      {twoDPanel && twoDDraft && active?.twoD && (
+        <TwoDProcessingDialog
+          key={documents.activeDocumentId + active.id}
+          spectrum={active}
+          panel={twoDPanel}
+          recipe={twoDDraft}
+          onRecipe={setTwoDDraft}
+          onPreview={setTwoDPreview}
+          onApply={(r) => void applyTwoDProcessing(r)}
+          onClose={() => {
+            setTwoDPanel(null);
+            setTwoDPreview(null);
+            setTool("select");
+          }}
+          onPickBaseline={() => setTool("baseline")}
+        />
+      )}
+      {twoDReference && active?.twoD && (
+        <div
+          className="two-d-reference"
+          role="dialog"
+          aria-label="Reference 2D spectrum"
+        >
+          <h3>Reference 2D spectrum</h3>
+          <p>
+            Snapped peak: F2 {twoDReference.x.toFixed(4)} · F1{" "}
+            {twoDReference.y.toFixed(4)} ppm
+          </p>
+          <label className="field">
+            <span>F2 reference (ppm)</span>
+            <input
+              aria-label="F2 reference ppm"
+              type="number"
+              step=".001"
+              value={twoDReference.targetX}
+              onChange={(e) =>
+                Number.isFinite(e.target.valueAsNumber) &&
+                setTwoDReference({
+                  ...twoDReference,
+                  targetX: e.target.valueAsNumber,
+                })
+              }
+            />
+          </label>
+          <label className="field">
+            <span>F1 reference (ppm)</span>
+            <input
+              aria-label="F1 reference ppm"
+              type="number"
+              step=".001"
+              value={twoDReference.targetY}
+              onChange={(e) =>
+                Number.isFinite(e.target.valueAsNumber) &&
+                setTwoDReference({
+                  ...twoDReference,
+                  targetY: e.target.valueAsNumber,
+                })
+              }
+            />
+          </label>
+          <footer>
+            <button
+              className="secondary"
+              onClick={() => setTwoDReference(null)}
+            >
+              Cancel
+            </button>
+            <button className="primary" onClick={applyTwoDReference}>
+              Apply reference
+            </button>
+          </footer>
+        </div>
       )}
       {baselineOpen && active && (
         <BaselineDialog

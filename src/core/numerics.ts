@@ -56,32 +56,66 @@ export function fft(
   }
 }
 
-/** Bruker GRPDLY correction: integer truncation and tail compensation, not a guessed fractional correction. */
+/** Advance the declared full Bruker delay, including its fractional sample, then compensate/truncate the wrapped tail. */
 export function correctDigitalFilter(fid: FidData): {
   real: Float64Array;
   imag: Float64Array;
 } {
   const n = fid.real.length,
     delay = Math.floor(fid.groupDelay);
-  if (!Number.isFinite(delay) || delay < 0)
+  if (!Number.isFinite(fid.groupDelay) || fid.groupDelay < 0)
     throw new Error(
       "Digital-filter delay is unavailable. Disable correction or import valid GRPDLY metadata.",
     );
-  if (!delay) return { real: fid.real.slice(), imag: fid.imag.slice() };
+  if (fid.groupDelay === 0)
+    return { real: fid.real.slice(), imag: fid.imag.slice() };
   if (delay + 8 >= n)
     throw new Error("Digital-filter delay exceeds the available FID.");
   const skip = delay + 2,
     add = Math.max(skip - 6, 0),
     length = n - skip;
+  let shiftedReal = Float64Array.from(
+      fid.real,
+      (_, i) => fid.real[(i + delay) % n],
+    ),
+    shiftedImag = Float64Array.from(
+      fid.imag,
+      (_, i) => fid.imag[(i + delay) % n],
+    );
+  const fraction = fid.groupDelay - delay;
+  if (fraction !== 0) {
+    const size = nextPowerOfTwo(n);
+    if (size > MAX_POINTS)
+      throw new Error(
+        "Digital-filter correction exceeds the 4 million point limit.",
+      );
+    const r = new Float64Array(size),
+      im = new Float64Array(size);
+    r.set(shiftedReal);
+    im.set(shiftedImag);
+    fft(r, im);
+    for (let k = 0; k < size; k++) {
+      // Signed frequencies avoid an artificial phase discontinuity at the carrier.
+      const frequency = (k < size / 2 ? k : k - size) / size;
+      const angle = 2 * Math.PI * frequency * fraction,
+        c = Math.cos(angle),
+        si = Math.sin(angle),
+        old = r[k];
+      r[k] = old * c - im[k] * si;
+      im[k] = old * si + im[k] * c;
+    }
+    fft(r, im, true);
+    shiftedReal = Float64Array.from(r.subarray(0, n), (v) => v / size);
+    shiftedImag = Float64Array.from(im.subarray(0, n), (v) => v / size);
+  }
   const real = new Float64Array(length),
     imag = new Float64Array(length);
   for (let i = 0; i < length; i++) {
-    real[i] = fid.real[(i + delay) % n];
-    imag[i] = fid.imag[(i + delay) % n];
+    real[i] = shiftedReal[i];
+    imag[i] = shiftedImag[i];
     if (i < add) {
-      const tail = (n - 1 - i + delay) % n;
-      real[i] += fid.real[tail];
-      imag[i] += fid.imag[tail];
+      real[i] += shiftedReal[n - 1 - i];
+      imag[i] += shiftedImag[n - 1 - i];
     }
   }
   return { real, imag };
@@ -101,8 +135,8 @@ function sourceSpectrum(s: Spectrum): ComplexData {
   const corrected = s.recipe.digitalFilter
     ? correctDigitalFilter(fid)
     : { real: fid.real, imag: fid.imag };
-  if (![1, 2, 4, 8].includes(s.recipe.zeroFill))
-    throw new Error("Zero fill must be 1, 2, 4 or 8.");
+  if (![1, 2, 4, 8, 16, 32].includes(s.recipe.zeroFill))
+    throw new Error("Zero fill must be 1, 2, 4, 8, 16 or 32.");
   const size = nextPowerOfTwo(corrected.real.length * s.recipe.zeroFill);
   if (size > MAX_POINTS)
     throw new Error(
@@ -164,6 +198,29 @@ export function applyPhase(
     data.imag[i] = r * si + im * c;
   }
   return data;
+}
+
+/** TopSpin's negative rotation uses index/N; our referenced-pivot recipe uses index/(N-1). */
+export function brukerPhaseCorrection(
+  data: ComplexData,
+  phc0: number,
+  phc1: number,
+  referenceOffset = 0,
+): { ph0: number; ph1: number; pivotPpm: number } {
+  const n = data.real.length;
+  if (
+    n < 2 ||
+    data.x.length !== n ||
+    ![phc0, phc1, referenceOffset, data.x[0]].every(Number.isFinite)
+  )
+    throw new Error(
+      "Stored Bruker phase requires a calibrated spectrum and finite PHC0/PHC1.",
+    );
+  return {
+    ph0: -phc0,
+    ph1: (-phc1 * (n - 1)) / n,
+    pivotPpm: data.x[0] + referenceOffset,
+  };
 }
 
 /** Conservative baseline: median estimates in blocks followed by robust linear interpolation. */
@@ -1036,14 +1093,20 @@ export function detectPeaks(
   negative = false,
 ): Peak[] {
   if (data.x.length !== data.real.length || data.real.length < 3) return [];
-  if (![offset, thresholdPercent, minDistancePpm].every(Number.isFinite)) throw new Error("Peak picking settings must be finite.");
+  if (![offset, thresholdPercent, minDistancePpm].every(Number.isFinite))
+    throw new Error("Peak picking settings must be finite.");
   let max = 0;
   for (const y of data.real) max = Math.max(max, negative ? Math.abs(y) : y);
   if (!(max > 0)) return [];
-  const differences: number[] = [], stride = Math.max(1, Math.floor(data.real.length / 8192));
-  for (let i = 1; i < data.real.length; i += stride) differences.push(Math.abs(data.real[i] - data.real[i - 1]));
+  const differences: number[] = [],
+    stride = Math.max(1, Math.floor(data.real.length / 8192));
+  for (let i = 1; i < data.real.length; i += stride)
+    differences.push(Math.abs(data.real[i] - data.real[i - 1]));
   const noise = data.real.length >= 32 ? median(differences) / 0.9538725524 : 0;
-  const threshold = Math.max((max * Math.max(0, thresholdPercent)) / 100, noise * 4),
+  const threshold = Math.max(
+      (max * Math.max(0, thresholdPercent)) / 100,
+      noise * 4,
+    ),
     candidates: { index: number; magnitude: number; sign: number }[] = [];
   for (let i = 1; i < data.real.length - 1; i++) {
     const y = data.real[i],
@@ -1060,43 +1123,86 @@ export function detectPeaks(
   // Adjacent peak intervals partition the array: valley/prominence checks are O(N).
   const valleys: { min: number; max: number }[] = [];
   let start = 0;
-  for (const end of [...candidates.map(c => c.index), data.real.length - 1]) {
-    let lo = Infinity, hi = -Infinity;
-    for (let i = start; i <= end; i++) { lo = Math.min(lo, data.real[i]); hi = Math.max(hi, data.real[i]); }
-    valleys.push({ min: lo, max: hi }); start = end;
+  for (const end of [...candidates.map((c) => c.index), data.real.length - 1]) {
+    let lo = Infinity,
+      hi = -Infinity;
+    for (let i = start; i <= end; i++) {
+      lo = Math.min(lo, data.real[i]);
+      hi = Math.max(hi, data.real[i]);
+    }
+    valleys.push({ min: lo, max: hi });
+    start = end;
   }
   // Topographic prominence searches up to a taller peak, so tiny noisy maxima
   // on a broad signal cannot hide that signal's actual highest line.
-  const higherLeft = new Int32Array(candidates.length).fill(-1), higherRight = new Int32Array(candidates.length).fill(candidates.length);
-  const positiveStack: number[] = [], negativeStack: number[] = [];
+  const higherLeft = new Int32Array(candidates.length).fill(-1),
+    higherRight = new Int32Array(candidates.length).fill(candidates.length);
+  const positiveStack: number[] = [],
+    negativeStack: number[] = [];
   for (let i = 0; i < candidates.length; i++) {
     const stack = candidates[i].sign > 0 ? positiveStack : negativeStack;
-    while (stack.length && candidates[stack.at(-1)!].magnitude <= candidates[i].magnitude) stack.pop();
-    if (stack.length) higherLeft[i] = stack.at(-1)!; stack.push(i);
+    while (
+      stack.length &&
+      candidates[stack.at(-1)!].magnitude <= candidates[i].magnitude
+    )
+      stack.pop();
+    if (stack.length) higherLeft[i] = stack.at(-1)!;
+    stack.push(i);
   }
-  positiveStack.length = 0; negativeStack.length = 0;
+  positiveStack.length = 0;
+  negativeStack.length = 0;
   for (let i = candidates.length - 1; i >= 0; i--) {
     const stack = candidates[i].sign > 0 ? positiveStack : negativeStack;
-    while (stack.length && candidates[stack.at(-1)!].magnitude <= candidates[i].magnitude) stack.pop();
-    if (stack.length) higherRight[i] = stack.at(-1)!; stack.push(i);
+    while (
+      stack.length &&
+      candidates[stack.at(-1)!].magnitude <= candidates[i].magnitude
+    )
+      stack.pop();
+    if (stack.length) higherRight[i] = stack.at(-1)!;
+    stack.push(i);
   }
-  const treeSize = nextPowerOfTwo(valleys.length), minTree = new Float64Array(treeSize * 2).fill(Infinity), maxTree = new Float64Array(treeSize * 2).fill(-Infinity);
-  valleys.forEach((v, i) => { minTree[treeSize + i] = v.min; maxTree[treeSize + i] = v.max; });
-  for (let i = treeSize - 1; i > 0; i--) { minTree[i] = Math.min(minTree[i * 2], minTree[i * 2 + 1]); maxTree[i] = Math.max(maxTree[i * 2], maxTree[i * 2 + 1]); }
+  const treeSize = nextPowerOfTwo(valleys.length),
+    minTree = new Float64Array(treeSize * 2).fill(Infinity),
+    maxTree = new Float64Array(treeSize * 2).fill(-Infinity);
+  valleys.forEach((v, i) => {
+    minTree[treeSize + i] = v.min;
+    maxTree[treeSize + i] = v.max;
+  });
+  for (let i = treeSize - 1; i > 0; i--) {
+    minTree[i] = Math.min(minTree[i * 2], minTree[i * 2 + 1]);
+    maxTree[i] = Math.max(maxTree[i * 2], maxTree[i * 2 + 1]);
+  }
   function valleyMinimum(left: number, right: number, sign: number): number {
-    left += treeSize; right += treeSize;
+    left += treeSize;
+    right += treeSize;
     let result = Infinity;
     while (left <= right) {
-      if (left & 1) { result = Math.min(result, sign > 0 ? minTree[left] : -maxTree[left]); left++; }
-      if (!(right & 1)) { result = Math.min(result, sign > 0 ? minTree[right] : -maxTree[right]); right--; }
-      left >>= 1; right >>= 1;
+      if (left & 1) {
+        result = Math.min(result, sign > 0 ? minTree[left] : -maxTree[left]);
+        left++;
+      }
+      if (!(right & 1)) {
+        result = Math.min(result, sign > 0 ? minTree[right] : -maxTree[right]);
+        right--;
+      }
+      left >>= 1;
+      right >>= 1;
     }
     return result;
   }
-  const resolved = candidates.filter((c, i) => c.magnitude - Math.max(valleyMinimum(higherLeft[i] + 1, i, c.sign), valleyMinimum(i + 1, higherRight[i], c.sign)) >= Math.max(noise * 3.5, max * 1e-12));
+  const resolved = candidates.filter(
+    (c, i) =>
+      c.magnitude -
+        Math.max(
+          valleyMinimum(higherLeft[i] + 1, i, c.sign),
+          valleyMinimum(i + 1, higherRight[i], c.sign),
+        ) >=
+      Math.max(noise * 3.5, max * 1e-12),
+  );
   resolved.sort((a, b) => b.magnitude - a.magnitude);
   const selected: Peak[] = [];
-  const distance = Math.max(0, minDistancePpm), buckets = new Map<number, number[]>();
+  const distance = Math.max(0, minDistancePpm),
+    buckets = new Map<number, number[]>();
   for (const { index: i } of resolved) {
     const a = data.real[i - 1],
       b = data.real[i],
@@ -1107,10 +1213,17 @@ export function detectPeaks(
       : 0;
     const ppm = data.x[i] + delta * (data.x[i + 1] - data.x[i]) + offset;
     const bucket = distance > 0 ? Math.floor(ppm / distance) : 0;
-    const tooClose = distance > 0 && [bucket - 1, bucket, bucket + 1].some(k => (buckets.get(k) ?? []).some(position => Math.abs(position - ppm) < distance));
+    const tooClose =
+      distance > 0 &&
+      [bucket - 1, bucket, bucket + 1].some((k) =>
+        (buckets.get(k) ?? []).some(
+          (position) => Math.abs(position - ppm) < distance,
+        ),
+      );
     if (!tooClose) {
       selected.push({ id: uid(), ppm, height: b - 0.25 * (a - c) * delta });
-      if (distance > 0) buckets.set(bucket, [...(buckets.get(bucket) ?? []), ppm]);
+      if (distance > 0)
+        buckets.set(bucket, [...(buckets.get(bucket) ?? []), ppm]);
     }
     if (selected.length >= 5000) break;
   }
@@ -1141,14 +1254,23 @@ export function integrate(
   return area;
 }
 
-function analysisRegionIndices(data: ComplexData, offset: number, low: number, high: number): [number, number] {
+function analysisRegionIndices(
+  data: ComplexData,
+  offset: number,
+  low: number,
+  high: number,
+): [number, number] {
   const ascending = data.x[0] < data.x[data.x.length - 1];
-  const a = ascending ? low - offset : -(high - offset), b = ascending ? high - offset : -(low - offset);
+  const a = ascending ? low - offset : -(high - offset),
+    b = ascending ? high - offset : -(low - offset);
   function bound(value: number, upper: boolean) {
-    let left = 0, right = data.x.length;
+    let left = 0,
+      right = data.x.length;
     while (left < right) {
-      const middle = (left + right) >>> 1, x = ascending ? data.x[middle] : -data.x[middle];
-      if (x < value || (upper && x === value)) left = middle + 1; else right = middle;
+      const middle = (left + right) >>> 1,
+        x = ascending ? data.x[middle] : -data.x[middle];
+      if (x < value || (upper && x === value)) left = middle + 1;
+      else right = middle;
     }
     return left;
   }
@@ -1161,11 +1283,14 @@ export function analyzeMultiplet(
   to: number,
   frequencyMHz: number,
 ): Multiplet {
-  const lo = Math.min(from, to), hi = Math.max(from, to);
-  if (![lo, hi, offset, frequencyMHz].every(Number.isFinite) || lo === hi) throw new Error("Choose finite multiplet region limits.");
+  const lo = Math.min(from, to),
+    hi = Math.max(from, to);
+  if (![lo, hi, offset, frequencyMHz].every(Number.isFinite) || lo === hi)
+    throw new Error("Choose finite multiplet region limits.");
   const [start, end] = analysisRegionIndices(data, offset, lo, hi);
   const region: ComplexData = {
-    x: data.x.slice(start, end), real: data.real.slice(start, end),
+    x: data.x.slice(start, end),
+    real: data.real.slice(start, end),
   };
   const spacing =
     region.x.length > 1 ? Math.abs(region.x[1] - region.x[0]) * 2 : 0.001;
@@ -1201,7 +1326,16 @@ export function analyzeMultiplet(
     count === 1
       ? "s"
       : equalSpacing && equalPattern
-        ? ({ 2: "d", 3: "t", 4: "q", 5: "quint", 6: "sext", 7: "sept" } as Record<number, string>)[count]
+        ? (
+            {
+              2: "d",
+              3: "t",
+              4: "q",
+              5: "quint",
+              6: "sext",
+              7: "sept",
+            } as Record<number, string>
+          )[count]
         : "m";
   const center = peaks.length
     ? peaks.reduce((sum, p) => sum + p.ppm * p.height, 0) /
@@ -1220,37 +1354,85 @@ export function analyzeMultiplet(
 }
 
 /** Automatic candidate regions; simple first-order labels remain tentative estimates. */
-export function autoMultiplets(s: Spectrum, from?: number, to?: number): Multiplet[] {
+export function autoMultiplets(
+  s: Spectrum,
+  from?: number,
+  to?: number,
+): Multiplet[] {
   if (s.data.x.length < 3) return [];
-  const bounds = [Math.max(s.data.x[0], s.data.x[s.data.x.length - 1]) + s.referenceOffset, Math.min(s.data.x[0], s.data.x[s.data.x.length - 1]) + s.referenceOffset];
-  const low = Math.min(from ?? bounds[0], to ?? bounds[1]), high = Math.max(from ?? bounds[0], to ?? bounds[1]);
-  if (!Number.isFinite(low) || !Number.isFinite(high) || low >= high) throw new Error("Choose a valid multiplet analysis region.");
-  const [start, end] = analysisRegionIndices(s.data, s.referenceOffset, low, high);
-  const region = { x: s.data.x.slice(start, end), real: s.data.real.slice(start, end) };
-  const peaks = detectPeaks(region, s.referenceOffset, 0.5, 0).sort((a, b) => a.ppm - b.ppm);
+  const bounds = [
+    Math.max(s.data.x[0], s.data.x[s.data.x.length - 1]) + s.referenceOffset,
+    Math.min(s.data.x[0], s.data.x[s.data.x.length - 1]) + s.referenceOffset,
+  ];
+  const low = Math.min(from ?? bounds[0], to ?? bounds[1]),
+    high = Math.max(from ?? bounds[0], to ?? bounds[1]);
+  if (!Number.isFinite(low) || !Number.isFinite(high) || low >= high)
+    throw new Error("Choose a valid multiplet analysis region.");
+  const [start, end] = analysisRegionIndices(
+    s.data,
+    s.referenceOffset,
+    low,
+    high,
+  );
+  const region = {
+    x: s.data.x.slice(start, end),
+    real: s.data.real.slice(start, end),
+  };
+  const peaks = detectPeaks(region, s.referenceOffset, 0.5, 0).sort(
+    (a, b) => a.ppm - b.ppm,
+  );
   if (!peaks.length) return [];
-  const step = Math.abs(s.data.x[1] - s.data.x[0]), maxGap = s.frequencyMHz > 0 ? 20 / s.frequencyMHz : 0.05;
+  const step = Math.abs(s.data.x[1] - s.data.x[0]),
+    maxGap = s.frequencyMHz > 0 ? 20 / s.frequencyMHz : 0.05;
   const groups: Peak[][] = [];
   for (const peak of peaks) {
-    const last = groups.at(-1), previous = last?.at(-1);
+    const last = groups.at(-1),
+      previous = last?.at(-1);
     if (last && previous && peak.ppm - previous.ppm <= maxGap) {
       const gap = peak.ppm - previous.ppm;
-      const [a, b] = analysisRegionIndices(s.data, s.referenceOffset, previous.ppm, peak.ppm);
+      const [a, b] = analysisRegionIndices(
+        s.data,
+        s.referenceOffset,
+        previous.ppm,
+        peak.ppm,
+      );
       let valley = Infinity;
       for (let i = a; i < b; i++) valley = Math.min(valley, s.data.real[i]);
       // Deep baseline separation plus large spacing splits independent signals;
       // tightly spaced resolved lines form one tentative multiplet candidate.
-      const boundary = valley < Math.min(previous.height, peak.height) * 0.02 && gap > (s.frequencyMHz > 0 ? 12 / s.frequencyMHz : 0.03);
-      if (!boundary) { last.push(peak); continue; }
+      const boundary =
+        valley < Math.min(previous.height, peak.height) * 0.02 &&
+        gap > (s.frequencyMHz > 0 ? 12 / s.frequencyMHz : 0.03);
+      if (!boundary) {
+        last.push(peak);
+        continue;
+      }
     }
     groups.push([peak]);
   }
   return groups.slice(0, 1000).map((group, index) => {
-    const first = group[0].ppm, last = group.at(-1)!.ppm;
-    const adjacentLow = groups[index - 1]?.at(-1)?.ppm ?? low, adjacentHigh = groups[index + 1]?.[0]?.ppm ?? high;
-    const padding = Math.max(step * 4, Math.min(0.04, s.frequencyMHz > 0 ? 4 / s.frequencyMHz : 0.01));
-    const left = Math.max(low, first - padding, (adjacentLow + first) / 2), right = Math.min(high, last + padding, (last + adjacentHigh) / 2);
-    const result = analyzeMultiplet(s.data, s.referenceOffset, right, left, s.frequencyMHz);
-    return { ...result, label: String.fromCharCode(65 + index % 26) + (index >= 26 ? String(Math.floor(index / 26) + 1) : "") };
+    const first = group[0].ppm,
+      last = group.at(-1)!.ppm;
+    const adjacentLow = groups[index - 1]?.at(-1)?.ppm ?? low,
+      adjacentHigh = groups[index + 1]?.[0]?.ppm ?? high;
+    const padding = Math.max(
+      step * 4,
+      Math.min(0.04, s.frequencyMHz > 0 ? 4 / s.frequencyMHz : 0.01),
+    );
+    const left = Math.max(low, first - padding, (adjacentLow + first) / 2),
+      right = Math.min(high, last + padding, (last + adjacentHigh) / 2);
+    const result = analyzeMultiplet(
+      s.data,
+      s.referenceOffset,
+      right,
+      left,
+      s.frequencyMHz,
+    );
+    return {
+      ...result,
+      label:
+        String.fromCharCode(65 + (index % 26)) +
+        (index >= 26 ? String(Math.floor(index / 26) + 1) : ""),
+    };
   });
 }

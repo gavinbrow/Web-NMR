@@ -123,9 +123,39 @@ export interface TwoDSpectrum {
   imagF1?: Float64Array;
   imagBoth?: Float64Array;
   experiment: string;
-  source: "Bruker processed 2D" | "Bruker raw 2D magnitude";
+  source:
+    | "Bruker processed 2D"
+    | "Bruker raw 2D magnitude"
+    | "Bruker raw 2D absorption";
   mode: "absorption" | "magnitude";
-  acquisitionMode?: "States" | "States-TPPI";
+  acquisitionMode?: "States" | "States-TPPI" | "Echo-Antiecho" | "QF";
+}
+export interface TwoDRawData {
+  real: Float64Array;
+  imag: Float64Array;
+  width: number;
+  height: number;
+  acquisitionMode: "States" | "States-TPPI" | "Echo-Antiecho" | "QF";
+  dwellSecondsF2: number;
+  dwellSecondsF1: number;
+  spectralWidthHzF2: number;
+  spectralWidthHzF1: number;
+  carrierPpmF2: number;
+  carrierPpmF1: number;
+  groupDelay: number;
+  nucleusF1: string;
+  frequencyF1: number;
+  experiment: string;
+}
+export interface TwoDProcessingRecipe {
+  echoAntiEchoOrder?: "echo-first" | "antiecho-first";
+  transform: boolean;
+  digitalFilter: boolean;
+  magnitude: boolean;
+  reconstructImaginary: boolean;
+  f2: ProcessingRecipe;
+  f1: ProcessingRecipe;
+  baselinePoints?: { xPpm: number; yPpm: number; value: number }[];
 }
 export interface TwoDView {
   /** Referenced ppm ranges, always [higher, lower]; F1 increases toward the bottom. */
@@ -140,6 +170,9 @@ export interface TwoDView {
 }
 export interface Spectrum {
   twoD?: TwoDSpectrum;
+  twoDOriginal?: TwoDSpectrum;
+  twoDRaw?: TwoDRawData;
+  twoDRecipe?: TwoDProcessingRecipe;
   twoDView?: TwoDView;
   properties?: SpectrumProperties;
   id: string;
@@ -176,6 +209,9 @@ export interface ImportEntry {
 export interface ImportResult {
   spectra: Spectrum[];
   warnings: string[];
+  stacks?: SpectrumStack[];
+  view?: [number, number];
+  projectName?: string;
 }
 export interface KineticTarget {
   id: string;
@@ -197,6 +233,15 @@ export interface KineticsConfiguration {
   concentrationUnit: string;
   excludedIds: string[];
   view: "curve" | "spectra";
+  fitEnabled?: boolean;
+  seriesSpectrumIds?: string[];
+  timeFill?: {
+    pattern: "doubling" | "linear" | "custom";
+    start: number;
+    step: number;
+    includeZero: boolean;
+    custom: string;
+  };
 }
 export interface Project {
   kinetics?: KineticsConfiguration;

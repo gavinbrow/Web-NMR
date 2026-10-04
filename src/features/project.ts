@@ -1,6 +1,12 @@
 import { zip, unzip, strToU8, strFromU8, type Zippable } from "fflate";
 import { get, set, del } from "idb-keyval";
-import type { ComplexData, Project, Spectrum, TwoDSpectrum } from "../model";
+import type {
+  ComplexData,
+  Project,
+  Spectrum,
+  TwoDSpectrum,
+  ProcessingRecipe,
+} from "../model";
 import { validProperties } from "./appearance";
 import { validTwoDView } from "./twoDTraces";
 
@@ -102,16 +108,95 @@ function validateTwoD(data: TwoDSpectrum): void {
       data.frequencyF1 > 0 &&
       finite(data.referenceOffsetF1) &&
       text(data.experiment) &&
-      ["Bruker processed 2D", "Bruker raw 2D magnitude"].includes(
-        data.source,
-      ) &&
+      [
+        "Bruker processed 2D",
+        "Bruker raw 2D magnitude",
+        "Bruker raw 2D absorption",
+      ].includes(data.source) &&
       ["absorption", "magnitude"].includes(data.mode),
     "Invalid 2D acquisition metadata.",
   );
   assert(
     data.acquisitionMode === undefined ||
-      ["States", "States-TPPI"].includes(data.acquisitionMode),
+      ["States", "States-TPPI", "Echo-Antiecho", "QF"].includes(
+        data.acquisitionMode,
+      ),
     "Invalid raw 2D acquisition mode.",
+  );
+}
+
+function validateRecipe(r: ProcessingRecipe) {
+  assert(
+    r &&
+      typeof r.transform === "boolean" &&
+      typeof r.digitalFilter === "boolean" &&
+      ["none", "exponential", "gaussian", "sinebell"].includes(r.window) &&
+      ["none", "auto", "manual"].includes(r.baseline),
+    "Invalid processing recipe.",
+  );
+  assert(
+    [r.lbHz, r.gaussianHz, r.zeroFill, r.ph0, r.ph1, r.pivotPpm].every(
+      finite,
+    ) &&
+      [1, 2, 4, 8, 16, 32].includes(r.zeroFill) &&
+      r.lbHz >= 0 &&
+      r.gaussianHz >= 0,
+    "Invalid processing parameters.",
+  );
+  assert(
+    list(r.baselineAnchors) &&
+      r.baselineAnchors.every((a) => a && finite(a.ppm) && finite(a.value)),
+    "Invalid baseline anchors.",
+  );
+  assert(
+    r.baselineMethod === undefined ||
+      [
+        "polynomial",
+        "bernstein",
+        "whittaker",
+        "ablative",
+        "splines",
+        "pcbc",
+        "arpls",
+        "snip",
+        "apbk",
+      ].includes(r.baselineMethod),
+    "Invalid automatic baseline method.",
+  );
+  assert(
+    r.manualBaselineMethod === undefined ||
+      ["segments", "splines", "polynomial", "whittaker"].includes(
+        r.manualBaselineMethod,
+      ),
+    "Invalid manual baseline method.",
+  );
+  for (const key of [
+    "baselineOrder",
+    "baselineMedianWindow",
+    "baselineSmoothness",
+    "baselineIterations",
+    "baselineSnipWindow",
+    "baselineRatio",
+  ] as const)
+    assert(
+      r[key] === undefined || (finite(r[key]) && Math.abs(r[key]!) <= 100_000),
+      `Invalid ${key} parameter.`,
+    );
+  const region = (value: unknown): boolean =>
+    Array.isArray(value) &&
+    value.length === 2 &&
+    value.every(finite) &&
+    value[0] !== value[1];
+  assert(
+    r.baselineRegion === undefined || region(r.baselineRegion),
+    "Invalid baseline region.",
+  );
+  assert(
+    r.baselineExcludedRegions === undefined ||
+      (list(r.baselineExcludedRegions) &&
+        r.baselineExcludedRegions.length <= 1000 &&
+        r.baselineExcludedRegions.every(region)),
+    "Invalid excluded baseline regions.",
   );
 }
 
@@ -193,6 +278,75 @@ export function validateProject(value: unknown): asserts value is Project {
     validateData(s.original);
     validateData(s.data);
     if (s.twoD) validateTwoD(s.twoD);
+    if (s.twoDOriginal) {
+      assert(s.twoD, "2D source requires a 2D spectrum.");
+      validateTwoD(s.twoDOriginal);
+    }
+    if (s.twoDRaw) {
+      const r = s.twoDRaw;
+      assert(
+        s.twoD &&
+          Number.isInteger(r.width) &&
+          Number.isInteger(r.height) &&
+          r.width >= 2 &&
+          r.height >= 2 &&
+          r.width * r.height <= MAX_MATRIX_POINTS &&
+          r.real instanceof Float64Array &&
+          r.imag instanceof Float64Array &&
+          r.real.length === r.width * r.height &&
+          r.imag.length === r.real.length,
+        "Invalid raw 2D dimensions.",
+      );
+      assert(
+        ["States", "States-TPPI", "Echo-Antiecho", "QF"].includes(
+          r.acquisitionMode,
+        ) &&
+          [
+            r.dwellSecondsF2,
+            r.dwellSecondsF1,
+            r.spectralWidthHzF2,
+            r.spectralWidthHzF1,
+            r.frequencyF1,
+          ].every((n) => finite(n) && n > 0) &&
+          [r.carrierPpmF2, r.carrierPpmF1, r.groupDelay].every(finite) &&
+          r.groupDelay >= 0 &&
+          text(r.nucleusF1) &&
+          text(r.experiment),
+        "Invalid raw 2D metadata.",
+      );
+      for (const values of [r.real, r.imag])
+        for (const n of values)
+          assert(finite(n), "Raw 2D data contain nonfinite values.");
+    }
+    if (s.twoDRecipe) {
+      const r = s.twoDRecipe;
+      assert(
+        s.twoD &&
+          [
+            r.transform,
+            r.digitalFilter,
+            r.magnitude,
+            r.reconstructImaginary,
+          ].every((v) => typeof v === "boolean"),
+        "Invalid 2D processing recipe.",
+      );
+      validateRecipe(r.f2);
+      validateRecipe(r.f1);
+      assert(
+        r.echoAntiEchoOrder === undefined ||
+          ["echo-first", "antiecho-first"].includes(r.echoAntiEchoOrder),
+        "Invalid echo/antiecho order.",
+      );
+      assert(
+        r.baselinePoints === undefined ||
+          (list(r.baselinePoints) &&
+            r.baselinePoints.length <= 1000 &&
+            r.baselinePoints.every(
+              (p) => p && [p.xPpm, p.yPpm, p.value].every(finite),
+            )),
+        "Invalid 2D baseline points.",
+      );
+    }
     assert(
       s.twoDView === undefined || (s.twoD && validTwoDView(s.twoDView)),
       "Invalid 2D view settings.",
@@ -220,81 +374,7 @@ export function validateProject(value: unknown): asserts value is Project {
       for (const a of [f.real, f.imag])
         for (const n of a) assert(finite(n), "FID contains nonfinite values.");
     }
-    const r = s.recipe;
-    assert(
-      r &&
-        typeof r.transform === "boolean" &&
-        typeof r.digitalFilter === "boolean" &&
-        ["none", "exponential", "gaussian", "sinebell"].includes(r.window) &&
-        ["none", "auto", "manual"].includes(r.baseline),
-      "Invalid processing recipe.",
-    );
-    assert(
-      [r.lbHz, r.gaussianHz, r.zeroFill, r.ph0, r.ph1, r.pivotPpm].every(
-        finite,
-      ) &&
-        r.zeroFill >= 1 &&
-        r.zeroFill <= 16 &&
-        r.lbHz >= 0 &&
-        r.gaussianHz >= 0,
-      "Invalid processing parameters.",
-    );
-    assert(
-      list(r.baselineAnchors) &&
-        r.baselineAnchors.every((a) => a && finite(a.ppm) && finite(a.value)),
-      "Invalid baseline anchors.",
-    );
-    assert(
-      r.baselineMethod === undefined ||
-        [
-          "polynomial",
-          "bernstein",
-          "whittaker",
-          "ablative",
-          "splines",
-          "pcbc",
-          "arpls",
-          "snip",
-          "apbk",
-        ].includes(r.baselineMethod),
-      "Invalid automatic baseline method.",
-    );
-    assert(
-      r.manualBaselineMethod === undefined ||
-        ["segments", "splines", "polynomial", "whittaker"].includes(
-          r.manualBaselineMethod,
-        ),
-      "Invalid manual baseline method.",
-    );
-    for (const key of [
-      "baselineOrder",
-      "baselineMedianWindow",
-      "baselineSmoothness",
-      "baselineIterations",
-      "baselineSnipWindow",
-      "baselineRatio",
-    ] as const)
-      assert(
-        r[key] === undefined ||
-          (finite(r[key]) && Math.abs(r[key]!) <= 100_000),
-        `Invalid ${key} parameter.`,
-      );
-    const region = (value: unknown): boolean =>
-      Array.isArray(value) &&
-      value.length === 2 &&
-      value.every(finite) &&
-      value[0] !== value[1];
-    assert(
-      r.baselineRegion === undefined || region(r.baselineRegion),
-      "Invalid baseline region.",
-    );
-    assert(
-      r.baselineExcludedRegions === undefined ||
-        (list(r.baselineExcludedRegions) &&
-          r.baselineExcludedRegions.length <= 1000 &&
-          r.baselineExcludedRegions.every(region)),
-      "Invalid excluded baseline regions.",
-    );
+    validateRecipe(s.recipe);
     assert(
       list(s.peaks) &&
         s.peaks.every(
@@ -361,6 +441,29 @@ export function validateProject(value: unknown): asserts value is Project {
       "Invalid kinetic targets.",
     );
     const targetIds = new Set<string>();
+    assert(
+      k.fitEnabled === undefined || typeof k.fitEnabled === "boolean",
+      "Invalid kinetics fit setting.",
+    );
+    assert(
+      k.seriesSpectrumIds === undefined ||
+        (list(k.seriesSpectrumIds) &&
+          k.seriesSpectrumIds.length <= 200 &&
+          k.seriesSpectrumIds.every((id) => text(id) && ids.has(id)) &&
+          new Set(k.seriesSpectrumIds).size === k.seriesSpectrumIds.length),
+      "Invalid kinetics spectrum membership.",
+    );
+    if (k.timeFill)
+      assert(
+        ["doubling", "linear", "custom"].includes(k.timeFill.pattern) &&
+          finite(k.timeFill.start) &&
+          k.timeFill.start >= 0 &&
+          finite(k.timeFill.step) &&
+          k.timeFill.step > 0 &&
+          typeof k.timeFill.includeZero === "boolean" &&
+          text(k.timeFill.custom),
+        "Invalid time point pattern.",
+      );
     for (const target of k.targets) {
       assert(
         target &&

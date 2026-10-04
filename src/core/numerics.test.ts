@@ -12,6 +12,7 @@ import {
   applyPhase,
   autoPhase,
   correctDigitalFilter,
+  brukerPhaseCorrection,
   detectPeaks,
   fft,
   integrate,
@@ -150,7 +151,7 @@ describe("independent numerical engine", () => {
     const out = correctDigitalFilter({
       real,
       imag,
-      groupDelay: 10.9,
+      groupDelay: 10,
       dwellSeconds: 1,
       spectralWidthHz: 1,
       carrierPpm: 0,
@@ -161,6 +162,57 @@ describe("independent numerical engine", () => {
     expect(out.real[6]).toBe(16);
     expect(out.imag[0]).toBe(-19);
     expect(real[0]).toBe(0);
+  });
+  it("removes a known fractional delay from a periodic complex FID, preserving phase and samples", () => {
+    for (const groupDelay of [0.375, 10.375]) {
+      const n = 128,
+        k = 5,
+        angle = (i: number) => (2 * Math.PI * k * i) / n;
+      const real = Float64Array.from({ length: n }, (_, i) =>
+          Math.cos(angle(i - groupDelay)),
+        ),
+        imag = Float64Array.from({ length: n }, (_, i) =>
+          Math.sin(angle(i - groupDelay)),
+        ),
+        saved = real.slice();
+      const out = correctDigitalFilter({
+        real,
+        imag,
+        groupDelay,
+        dwellSeconds: 1,
+        spectralWidthHz: 1,
+        carrierPpm: 0,
+      });
+      const skip = Math.floor(groupDelay) + 2,
+        add = Math.max(skip - 6, 0);
+      expect(out.real.length).toBe(n - skip);
+      for (let i = 0; i < out.real.length; i++) {
+        expect(out.real[i]).toBeCloseTo(
+          Math.cos(angle(i)) + (i < add ? Math.cos(angle(n - 1 - i)) : 0),
+          10,
+        );
+        expect(out.imag[i]).toBeCloseTo(
+          Math.sin(angle(i)) + (i < add ? Math.sin(angle(n - 1 - i)) : 0),
+          10,
+        );
+      }
+      expect(real).toEqual(saved);
+    }
+  });
+  it("maps stored TopSpin phase onto the exact descending FFT grid and referenced pivot", () => {
+    const data = {
+      x: Float64Array.from([10, 8, 6, 4]),
+      real: Float64Array.from([1, 1, 1, 1]),
+      imag: new Float64Array(4),
+    };
+    const mapped = brukerPhaseCorrection(data, 30, -80, 2);
+    expect(mapped).toEqual({ ph0: -30, ph1: 60, pivotPpm: 12 });
+    applyPhase(data, mapped.ph0, mapped.ph1, mapped.pivotPpm - 2);
+    for (let i = 0; i < 4; i++)
+      expect(data.real[i]).toBeCloseTo(
+        Math.cos(((-30 + (80 * i) / 4) * Math.PI) / 180),
+        12,
+      );
   });
   it("integrates clipped endpoints, signed intensity and reference offsets", () => {
     const data = {
@@ -334,6 +386,76 @@ describe("reference and replay regression checks", () => {
 });
 
 describe("vendor and text adapters", () => {
+  it("replays full fractional delay and saved phase against actual native proton and carbon absorption", () => {
+    for (const folder of ["Proton", "Carbon (publication grade)"]) {
+      const s = importEntries(fixtureEntries(folder)).spectra[0],
+        vendor = s.original;
+      const file = readFileSync(
+          join(process.cwd(), "../Example Files", folder, "pdata/1/1i"),
+        ),
+        vendorImag = Float64Array.from(
+          { length: vendor.real.length },
+          (_, i) => -file.readInt32LE(i * 4) * 2 ** Number(s.metadata.NC_proc),
+        );
+      s.recipe = {
+        ...defaultRecipe(),
+        transform: true,
+        window: "exponential",
+        lbHz: Number(s.metadata.LB),
+        zeroFill: 4,
+      };
+      const unphased = processSpectrum(s);
+      Object.assign(
+        s.recipe,
+        brukerPhaseCorrection(
+          unphased,
+          Number(s.metadata.PHC0),
+          Number(s.metadata.PHC1),
+        ),
+      );
+      const actual = processSpectrum(s);
+      let dotR = 0,
+        normR = 0,
+        normV = 0,
+        crossR = 0,
+        crossI = 0,
+        normComplex = 0,
+        vendorComplex = 0,
+        peakAmplitude = 0;
+      for (let i = 0; i < vendor.real.length; i++)
+        peakAmplitude = Math.max(
+          peakAmplitude,
+          Math.hypot(vendor.real[i], vendorImag[i]),
+        );
+      for (let i = 0; i < actual.real.length; i++) {
+        const r = actual.real[i],
+          im = actual.imag![i],
+          vr = vendor.real[i],
+          vi = vendorImag[i];
+        dotR += r * vr;
+        normR += r * r;
+        normV += vr * vr;
+        if (Math.hypot(vr, vi) > peakAmplitude * 0.01) {
+          crossR += r * vr + im * vi;
+          crossI += r * vi - im * vr;
+          normComplex += r * r + im * im;
+          vendorComplex += vr * vr + vi * vi;
+        }
+      }
+      // Check real absorption across the full dataset and complex phase in resolved signal above 1% noise/background.
+      expect(dotR / Math.sqrt(normR * normV)).toBeGreaterThan(
+        folder === "Proton" ? 0.99 : 0.9,
+      );
+      expect(
+        Math.hypot(crossR, crossI) / Math.sqrt(normComplex * vendorComplex),
+      ).toBeGreaterThan(folder === "Proton" ? 0.999 : 0.985);
+      expect(
+        Math.abs((Math.atan2(crossI, crossR) * 180) / Math.PI),
+      ).toBeLessThan(6);
+      expect(actual.real.length).toBe(vendor.real.length);
+      expect(s.original.real).toBe(vendor.real);
+    }
+  }, 15000);
   it("imports actual supplied Bruker proton and million-point carbon without reapplying phase", () => {
     for (const folder of ["Proton", "Carbon (publication grade)"]) {
       const result = importEntries(fixtureEntries(folder));
@@ -356,8 +478,14 @@ describe("vendor and text adapters", () => {
       s.recipe.zeroFill = 2;
       const raw = processSpectrum(s);
       expect(raw.real.every(Number.isFinite)).toBe(true);
-      const processedPeak = detectPeaks(s.original, 0, 85, 0.02)[0],
-        rawPeak = detectPeaks(raw, 0, 85, 0.02)[0];
+      const magnitude = (d: ComplexData): ComplexData => ({
+        x: d.x,
+        real: Float64Array.from(d.real, (v, i) =>
+          Math.hypot(v, d.imag?.[i] || 0),
+        ),
+      });
+      const processedPeak = detectPeaks(magnitude(s.original), 0, 85, 0.02)[0],
+        rawPeak = detectPeaks(magnitude(raw), 0, 85, 0.02)[0];
       expect(Math.abs(processedPeak.ppm - rawPeak.ppm)).toBeLessThan(0.05);
     }
   }, 15000);

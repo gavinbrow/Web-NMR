@@ -15,6 +15,11 @@ import {
   encodeProject,
   validateProject,
 } from "../features/project";
+import {
+  analyticQuadrature,
+  processTwoD,
+  defaultTwoDRecipe,
+} from "./twoDProcessing";
 
 function fixtures(folder: string, rawOnly = false): ImportEntry[] {
   const base = join(process.cwd(), "../Example Files", folder),
@@ -151,6 +156,99 @@ describe("Bruker processed 2D support", () => {
       }
     }
   });
+  it("maps native quadrants by F2-first filename order and conjugates single imaginary axes only", () => {
+    const plane = (value: number) => {
+      const b = new ArrayBuffer(16),
+        v = new DataView(b);
+      for (let i = 0; i < 4; i++) v.setInt32(i * 4, value, true);
+      return b;
+    };
+    const p = {
+      SI: 2,
+      XDIM: 2,
+      SF: 400,
+      SW_p: 4000,
+      OFFSET: 10,
+      BYTORDP: 0,
+      DTYPP: 0,
+      NC_proc: 0,
+    };
+    const data = readProcessedTwoD(
+      { rr: plane(1), ir: plane(2), ri: plane(3), ii: plane(4) },
+      p,
+      p,
+    );
+    expect([...data.real]).toEqual([1, 1, 1, 1]);
+    expect([...data.imagF2!]).toEqual([-2, -2, -2, -2]);
+    expect([...data.imagF1!]).toEqual([-3, -3, -3, -3]);
+    expect([...data.imagBoth!]).toEqual([4, 4, 4, 4]);
+  });
+  it("uses the matching imaginary axis for native COSY/NOESY phase controls", () => {
+    const correlation = (a: Float64Array, b: Float64Array) => {
+      let dot = 0,
+        aa = 0,
+        bb = 0;
+      for (let i = 0; i < a.length; i++) {
+        dot += a[i] * b[i];
+        aa += a[i] * a[i];
+        bb += b[i] * b[i];
+      }
+      return dot / Math.sqrt(aa * bb);
+    };
+    for (const folder of ["DAC-1P Nosy Cosy C13/4", "DAC-1P Nosy Cosy C13/5"]) {
+      const s = importEntries(fixtures(folder)).spectra[0],
+        d = s.twoD!;
+      const hx = new Float64Array(d.real.length),
+        hy = new Float64Array(d.real.length),
+        hxy = new Float64Array(d.real.length);
+      for (let row = 0; row < d.height; row++)
+        hx.set(
+          analyticQuadrature(
+            d.real.subarray(row * d.width, (row + 1) * d.width),
+          ),
+          row * d.width,
+        );
+      for (let col = 0; col < d.width; col++) {
+        const line = analyticQuadrature(
+          Float64Array.from(
+            { length: d.height },
+            (_, row) => d.real[row * d.width + col],
+          ),
+        );
+        const cross = analyticQuadrature(
+          Float64Array.from(
+            { length: d.height },
+            (_, row) => hx[row * d.width + col],
+          ),
+        );
+        for (let row = 0; row < d.height; row++)
+          hy[row * d.width + col] = line[row];
+        for (let row = 0; row < d.height; row++)
+          hxy[row * d.width + col] = cross[row];
+      }
+      // Real/imaginary Hilbert consistency is assessed on actual native data;
+      // baseline and finite spectral-window effects prevent exact equality.
+      expect(correlation(hx, d.imagF2!)).toBeGreaterThan(0.9);
+      expect(correlation(hy, d.imagF1!)).toBeGreaterThan(
+        folder.endsWith("/4") ? 0.98 : 0.65,
+      );
+      expect(correlation(hxy, d.imagBoth!)).toBeGreaterThan(
+        folder.endsWith("/4") ? 0.89 : 0.6,
+      );
+      s.twoDRecipe = defaultTwoDRecipe(s);
+      s.twoDRecipe.f2.ph0 = 90;
+      const phased = processTwoD(s).data;
+      let max = 0,
+        index = 0;
+      for (let i = 0; i < d.imagF2!.length; i++)
+        if (Math.abs(d.imagF2![i]) > max) {
+          max = Math.abs(d.imagF2![i]);
+          index = i;
+        }
+      expect(phased.real[index]).toBeCloseTo(-d.imagF2![index], 8);
+      expect(d.real).toBe(s.twoDOriginal!.real);
+    }
+  }, 15000);
   it("round-trips actual NOESY matrices, axes, quadrant components and comments", async () => {
     const s = importEntries(fixtures("DAC-1P Nosy Cosy C13/5")).spectra[0];
     const project: Project = {
@@ -282,9 +380,13 @@ describe("limited raw States/States-TPPI magnitude processing", () => {
     expect(Math.abs(rawX - procX)).toBeLessThan(0.08);
     expect(Math.abs(rawY - procY)).toBeLessThan(0.08);
   });
-  it("raw-only echo/antiecho remains explicit unsupported, while its processed plane imports", () => {
+  it("opens raw-only echo/antiecho as magnitude and preserves raw data for phase-sensitive replay", () => {
     const result = importEntries(fixtures("DAC-1P Nosy Cosy C13/4", true));
-    expect(result.spectra).toHaveLength(0);
-    expect(result.warnings.join(" ")).toMatch(/FnMODE 6 is unsupported/);
+    expect(result.spectra).toHaveLength(1);
+    expect(result.spectra[0].twoD?.mode).toBe("magnitude");
+    expect(result.spectra[0].twoDRaw?.acquisitionMode).toBe("Echo-Antiecho");
+    expect(result.warnings.join(" ")).toMatch(
+      /Peak signs and phase-sensitive intensities are not preserved/,
+    );
   });
 });
