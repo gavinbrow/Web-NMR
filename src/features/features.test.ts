@@ -88,6 +88,38 @@ function project(): Project {
   };
 }
 describe("portable project", () => {
+  it("retains original Mnova bytes and saved analysis while storing shared signal arrays once", async () => {
+    const source = project();
+    source.originalMnova = {
+      name: "owned.mnova",
+      bytes: Uint8Array.from({ length: 128 }, (_, n) => n),
+      importNotes: ["Saved text report"],
+    };
+    source.spectra[0].data = source.spectra[0].original;
+    source.spectra[0].savedView = [3.5, 2.5];
+    source.spectra[0].peaks[0].label = "Alpha";
+    source.spectra[0].integrals[0].imported = {
+      source: "Mnova",
+      normalizedValue: 3.123,
+      rawArea: 100,
+      referenceArea: 32.020492,
+    };
+    const encoded = await encodeProject(source),
+      files = unzipSync(encoded),
+      manifest = JSON.parse(strFromU8(files["manifest.json"]));
+    expect(manifest.spectra[0].data.real.path).toBe(
+      manifest.spectra[0].original.real.path,
+    );
+    const restored = await decodeProject(encoded);
+    expect(restored.originalMnova).toEqual(source.originalMnova);
+    expect(restored.spectra[0]).toEqual(source.spectra[0]);
+    expect(restored.spectra[0].data.real).toBe(
+      restored.spectra[0].original.real,
+    );
+    manifest.spectra[0].data.real.length = 99;
+    files["manifest.json"] = strToU8(JSON.stringify(manifest));
+    await expect(decodeProject(zipSync(files))).rejects.toThrow("array length");
+  });
   it("preserves machine-size32x zero filling and rejects unsupported factors", async () => {
     const p = project();
     p.spectra[0].recipe.zeroFill = 32;

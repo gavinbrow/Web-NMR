@@ -471,8 +471,13 @@ function axisBaseline(
 }
 export function processTwoD(s: Spectrum): TwoDProcessingResult {
   const recipe = s.twoDRecipe || defaultTwoDRecipe(s),
-    original = s.twoDOriginal || s.twoD,
+    original =
+      recipe.source === "mnova-source"
+        ? s.nativeSource2D
+        : s.twoDOriginal || s.twoD,
     warnings: string[] = [];
+  if (recipe.source === "mnova-source" && !original)
+    throw new Error("This spectrum has no saved Mnova source plane.");
   if (!original && !s.twoDRaw) throw new Error("No 2D source data available.");
   let data: TwoDSpectrum;
   if (recipe.transform) {

@@ -52,6 +52,27 @@ function spectrum(data = matrix()): Spectrum {
   s.twoDRecipe = defaultTwoDRecipe(s);
   return s;
 }
+describe("saved native 2D processing source", () => {
+  it("keeps corrected and source quadrants separate and uses the explicitly chosen source", () => {
+    const corrected = matrix(4, 2),
+      source = matrix(4, 2);
+    corrected.real.fill(20);
+    corrected.imagF2!.fill(4);
+    source.real.fill(3);
+    source.imagF2!.fill(7);
+    const s = spectrum(corrected);
+    s.nativeSource2D = source;
+    expect(Array.from(processTwoD(s).data.real)).toEqual(Array(8).fill(20));
+    s.twoDRecipe = { ...s.twoDRecipe!, source: "mnova-source" };
+    expect(Array.from(processTwoD(s).data.real)).toEqual(Array(8).fill(3));
+    s.twoDRecipe.f2.ph0 = 90;
+    expect(processTwoD(s).data.real[0]).toBeCloseTo(-7);
+    expect(corrected.real[0]).toBe(20);
+    expect(source.real[0]).toBe(3);
+    s.nativeSource2D = undefined;
+    expect(() => processTwoD(s)).toThrow("no saved Mnova source");
+  });
+});
 function syntheticRaw(mode: TwoDRawData["acquisitionMode"]): TwoDRawData {
   const width = 16,
     increments = 8,

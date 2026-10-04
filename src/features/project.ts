@@ -14,7 +14,11 @@ const MAX_BYTES = 256 * 1024 * 1024;
 const MAX_POINTS = 8_388_608;
 const MAX_MATRIX_POINTS = 10_000_000;
 const RECOVERY_KEY = "web-nmr-recovery-v1";
-type ArrayRef = { __array: "float64le"; path: string; length: number };
+type ArrayRef = {
+  __array: "float64le" | "uint8";
+  path: string;
+  length: number;
+};
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
@@ -228,6 +232,18 @@ export function validateProject(value: unknown): asserts value is Project {
     "Invalid view limits.",
   );
   const ids = new Set<string>();
+  if (p.originalMnova) {
+    assert(
+      text(p.originalMnova.name) &&
+        /\.mnova$/i.test(p.originalMnova.name) &&
+        p.originalMnova.bytes instanceof Uint8Array &&
+        p.originalMnova.bytes.length >= 27 &&
+        p.originalMnova.bytes.length <= MAX_BYTES &&
+        list(p.originalMnova.importNotes) &&
+        p.originalMnova.importNotes.every(text),
+      "Invalid retained Mnova source document.",
+    );
+  }
   for (const s of p.spectra as Spectrum[]) {
     assert(
       s &&
@@ -319,6 +335,10 @@ export function validateProject(value: unknown): asserts value is Project {
         for (const n of values)
           assert(finite(n), "Raw 2D data contain nonfinite values.");
     }
+    if (s.nativeSource2D) {
+      assert(!!s.twoD, "Native 2D source requires a 2D spectrum.");
+      validateTwoD(s.nativeSource2D);
+    }
     if (s.twoDRecipe) {
       const r = s.twoDRecipe;
       assert(
@@ -333,6 +353,15 @@ export function validateProject(value: unknown): asserts value is Project {
       );
       validateRecipe(r.f2);
       validateRecipe(r.f1);
+      assert(
+        r.source === undefined ||
+          ["processed", "mnova-source"].includes(r.source),
+        "Invalid 2D processing source.",
+      );
+      assert(
+        r.source !== "mnova-source" || !!s.nativeSource2D,
+        "Saved Mnova processing source is missing.",
+      );
       assert(
         r.echoAntiEchoOrder === undefined ||
           ["echo-first", "antiecho-first"].includes(r.echoAntiEchoOrder),
@@ -377,9 +406,22 @@ export function validateProject(value: unknown): asserts value is Project {
     }
     validateRecipe(s.recipe);
     assert(
+      s.savedView === undefined ||
+        (Array.isArray(s.savedView) &&
+          s.savedView.length === 2 &&
+          s.savedView.every(finite) &&
+          s.savedView[0] > s.savedView[1]),
+      "Invalid saved spectrum view.",
+    );
+    assert(
       list(s.peaks) &&
         s.peaks.every(
-          (a) => a && text(a.id) && finite(a.ppm) && finite(a.height),
+          (a) =>
+            a &&
+            text(a.id) &&
+            finite(a.ppm) &&
+            finite(a.height) &&
+            (a.label === undefined || text(a.label)),
         ),
       "Invalid peaks.",
     );
@@ -411,6 +453,18 @@ export function validateProject(value: unknown): asserts value is Project {
         "Invalid integral calibration reference.",
       );
     }
+    for (const i of s.integrals)
+      if (i.imported)
+        assert(
+          i.imported.source === "Mnova" &&
+            [
+              i.imported.normalizedValue,
+              i.imported.rawArea,
+              i.imported.referenceArea,
+            ].every(finite) &&
+            i.imported.referenceArea !== 0,
+          "Invalid imported integral values.",
+        );
     assert(
       list(s.multiplets) &&
         s.multiplets.every(
@@ -425,6 +479,20 @@ export function validateProject(value: unknown): asserts value is Project {
         ),
       "Invalid multiplets.",
     );
+    for (const m of s.multiplets)
+      if (m.imported)
+        assert(
+          m.imported.source === "Mnova" &&
+            [
+              m.imported.normalizedValue,
+              m.imported.rawArea,
+              m.imported.referenceArea,
+              m.imported.nuclideCount,
+            ].every(finite) &&
+            m.imported.referenceArea !== 0 &&
+            m.imported.nuclideCount >= 0,
+          "Invalid imported multiplet values.",
+        );
   }
   assert(
     p.activeId === null || ids.has(p.activeId),
@@ -557,7 +625,21 @@ export async function encodeProject(project: Project): Promise<Uint8Array> {
   const files: Zippable = {};
   let count = 0,
     total = 0;
+  const arrays = new WeakMap<object, ArrayRef>();
   function encode(value: unknown): unknown {
+    if (value instanceof Uint8Array || value instanceof Float64Array) {
+      const existing = arrays.get(value);
+      if (existing) return existing;
+    }
+    if (value instanceof Uint8Array) {
+      total += value.byteLength;
+      assert(total <= MAX_BYTES, "Project exceeds the 256 MB save limit.");
+      const path = `arrays/${count++}.u8`;
+      files[path] = [value, { level: 1 }];
+      const ref: ArrayRef = { __array: "uint8", path, length: value.length };
+      arrays.set(value, ref);
+      return ref;
+    }
     if (value instanceof Float64Array) {
       total += value.byteLength;
       assert(total <= MAX_BYTES, "Project exceeds the 256 MB save limit.");
@@ -567,11 +649,13 @@ export async function encodeProject(project: Project): Promise<Uint8Array> {
       for (let i = 0; i < value.length; i++)
         dv.setFloat64(i * 8, value[i], true);
       files[path] = [bytes, { level: 1 }];
-      return {
+      const ref: ArrayRef = {
         __array: "float64le",
         path,
         length: value.length,
-      } satisfies ArrayRef;
+      };
+      arrays.set(value, ref);
+      return ref;
     }
     if (Array.isArray(value)) return value.map(encode);
     if (value && typeof value === "object")
@@ -616,7 +700,7 @@ export async function decodeProject(bytes: Uint8Array): Promise<Project> {
             return (
               !oversized &&
               (file.name === "manifest.json" ||
-                /^arrays\/\d+\.f64$/.test(file.name))
+                /^arrays\/\d+\.(f64|u8)$/.test(file.name))
             );
           },
         },
@@ -635,12 +719,36 @@ export async function decodeProject(bytes: Uint8Array): Promise<Project> {
   );
   const manifest: unknown = JSON.parse(strFromU8(files["manifest.json"]));
   let decodedBytes = 0;
+  const arrays = new Map<string, Float64Array | Uint8Array>();
   function decode(value: unknown, depth = 0): unknown {
     assert(depth < 30, "Project structure is too deeply nested.");
     if (Array.isArray(value)) return value.map((v) => decode(v, depth + 1));
     if (value && typeof value === "object") {
       const ref = value as ArrayRef;
       if (ref.__array) {
+        if (ref.__array === "uint8") {
+          assert(
+            /^arrays\/\d+\.u8$/.test(ref.path) &&
+              Number.isInteger(ref.length) &&
+              ref.length >= 27 &&
+              ref.length <= MAX_BYTES,
+            "Invalid source document array reference.",
+          );
+          const source = files[ref.path];
+          assert(
+            source && source.length === ref.length,
+            "Source document length does not match its manifest.",
+          );
+          const existing = arrays.get(ref.path);
+          if (existing) return existing;
+          decodedBytes += source.length;
+          assert(
+            decodedBytes <= MAX_BYTES,
+            "Decoded project arrays exceed the 256 MB limit.",
+          );
+          arrays.set(ref.path, source);
+          return source;
+        }
         assert(
           ref.__array === "float64le" &&
             /^arrays\/\d+\.f64$/.test(ref.path) &&
@@ -654,6 +762,8 @@ export async function decodeProject(bytes: Uint8Array): Promise<Project> {
           source && source.byteLength === ref.length * 8,
           "Project array length does not match its manifest.",
         );
+        const existing = arrays.get(ref.path);
+        if (existing) return existing;
         decodedBytes += source.byteLength;
         assert(
           decodedBytes <= MAX_BYTES,
@@ -667,6 +777,7 @@ export async function decodeProject(bytes: Uint8Array): Promise<Project> {
           );
         for (let i = 0; i < result.length; i++)
           result[i] = dv.getFloat64(i * 8, true);
+        arrays.set(ref.path, result);
         return result;
       }
       return Object.fromEntries(

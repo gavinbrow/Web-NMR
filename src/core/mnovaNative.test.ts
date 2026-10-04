@@ -33,6 +33,23 @@ describe("native Mnova local reference verification", () => {
       expect(result.stacks?.map((s) => s.spectrumIds.length)).toEqual(
         expected.stacks?.map((s) => s.spectrumIds.length),
       );
+      expect(result.spectra[0].savedView).toEqual([
+        8.440252831970579, 3.341754477624404,
+      ]);
+      expect(result.spectra[0].metadata.mnovaIntensityMin).toBe(
+        -148.45634468536517,
+      );
+      expect(result.spectra.reduce((n, s) => n + s.integrals.length, 0)).toBe(
+        190,
+      );
+      expect(result.spectra.every((s) => s.integrals.length === 5)).toBe(true);
+      expect(
+        result.spectra.reduce(
+          (n, s) => n + Number(s.metadata.mnovaReportCount ?? 0),
+          0,
+        ),
+      ).toBe(2);
+      expect(result.warnings).toEqual([]);
       for (let i = 0; i < 38; i++) {
         const s = result.spectra[i],
           e = expected.spectra[i];
@@ -42,6 +59,33 @@ describe("native Mnova local reference verification", () => {
         expect(s.nucleus).toBe(e.nucleus);
         expect(s.data.x).toEqual(e.data.x);
         expect(s.data.real).toEqual(e.data.real);
+        expect(s.fid?.real).toEqual(e.fid?.real);
+        expect(s.fid?.imag).toEqual(e.fid?.imag);
+        expect(s.fid?.groupDelay).toBe(e.fid?.groupDelay);
+        expect(s.fid?.dwellSeconds).toBe(e.fid?.dwellSeconds);
+      }
+      const independent = "/tmp/webnmr-native-probes/analysis-reference.json";
+      if (existsSync(independent)) {
+        const ref = JSON.parse(readFileSync(independent, "utf8")) as {
+          normValue: number;
+          integrals: {
+            min: number;
+            max: number;
+            raw: number;
+            normalized: number;
+          }[];
+        }[];
+        expect(ref).toHaveLength(38);
+        result.spectra.forEach((s, i) =>
+          s.integrals.forEach((region, j) => {
+            const expected = ref[i].integrals[j];
+            expect(region.from).toBe(expected.max);
+            expect(region.to).toBe(expected.min);
+            expect(region.imported?.rawArea).toBe(expected.raw);
+            expect(region.imported?.normalizedValue).toBe(expected.normalized);
+            expect(region.imported?.referenceArea).toBe(ref[i].normValue);
+          }),
+        );
       }
     },
     30000,
@@ -143,4 +187,26 @@ describe("native Mnova local reference verification", () => {
       "Not a supported",
     );
   });
+  it.skipIf(!existsSync("/tmp/webnmr-native-probes/coupling-control.mnova"))(
+    "restores complete saved annotations from the native control without fabricating or rerunning analysis",
+    async () => {
+      const imported = await importMnovaNative(
+          buf(readFileSync("/tmp/webnmr-native-probes/coupling-control.mnova")),
+        ),
+        s = imported.spectra[0];
+      expect(imported.warnings).toEqual([]);
+      expect(s.integrals).toHaveLength(3);
+      expect(s.integrals[0].imported?.normalizedValue).toBe(3);
+      expect(s.peaks.map((p) => [p.ppm, p.label])).toEqual([
+        [2.1, "Synthetic alpha"],
+        [-2.7, "Synthetic beta"],
+      ]);
+      expect(s.multiplets.map((m) => [m.kind, m.couplingsHz, m.label])).toEqual(
+        [
+          ["dd", [7.125, 2.5], "Alpha"],
+          ["q", [12.75], "Beta"],
+        ],
+      );
+    },
+  );
 });

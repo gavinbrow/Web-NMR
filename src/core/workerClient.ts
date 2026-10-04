@@ -84,6 +84,10 @@ export function processBaselineAsync(
 function twoDJob(spectrum: Spectrum): Spectrum {
   return {
     ...spectrum,
+    nativeSource2D:
+      spectrum.twoDRecipe?.source === "mnova-source"
+        ? spectrum.nativeSource2D
+        : undefined,
     twoD: spectrum.twoDOriginal ? undefined : spectrum.twoD,
     twoDOriginal: spectrum.twoDOriginal
       ? {

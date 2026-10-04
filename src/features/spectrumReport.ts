@@ -1,7 +1,7 @@
 import { strToU8, zipSync } from "fflate";
 import type { Spectrum } from "../model";
 import { integrate } from "../core/numerics";
-import { integralReportingScale } from "./integrals";
+import { integralReportingScale, displayedIntegralValue } from "./integrals";
 import { safeFilename } from "./project";
 
 export interface SpectrumReportOptions {
@@ -352,7 +352,9 @@ function analysisSheet(s: Spectrum, options: SpectrumReportOptions): Sheet {
     rows.push(
       [
         "Integral method",
-        "Signed trapezoidal areas from the exported corrected trace.",
+        s.integrals.some((i) => i.imported)
+          ? "Signed trapezoidal areas from the corrected trace; saved Mnova normalized values are preserved separately."
+          : "Signed trapezoidal areas from the exported corrected trace.",
       ],
       ["Normalization factor", factor],
       [
@@ -382,16 +384,24 @@ function analysisSheet(s: Spectrum, options: SpectrumReportOptions): Sheet {
           i.from,
           i.to,
           i.area,
-          { formula: `E${row}*$B$4`, value: i.area * factor },
+          i.imported
+            ? displayedIntegralValue(s, i)
+            : { formula: `E${row}*$B$4`, value: i.area * factor },
         ]);
       }
       rows.push([]);
     }
     if (options.includePeaks) {
       headers.add(rows.length);
-      rows.push(["Peak ID", "Chemical shift (ppm)", "Peak intensity"]);
+      rows.push([
+        "Peak ID",
+        "Chemical shift (ppm)",
+        "Peak intensity",
+        "Annotation",
+      ]);
       if (!s.peaks.length) rows.push(["No picked peaks"]);
-      for (const p of s.peaks) rows.push([p.id, p.ppm, p.height]);
+      for (const p of s.peaks)
+        rows.push([p.id, p.ppm, p.height, p.label || ""]);
       rows.push([]);
     }
     if (options.includeMultiplets) {
@@ -412,6 +422,8 @@ function analysisSheet(s: Spectrum, options: SpectrumReportOptions): Sheet {
         "Center (ppm)",
         "Multiplicity",
         "Peak count",
+        "Saved normalized integral",
+        "Saved nuclide count",
         ...Array.from({ length: count }, (_, i) => `J${i + 1} (Hz)`),
       ]);
       if (!s.multiplets.length) rows.push(["No analyzed multiplets"]);
@@ -424,6 +436,8 @@ function analysisSheet(s: Spectrum, options: SpectrumReportOptions): Sheet {
           m.center,
           m.kind,
           m.peakCount,
+          m.imported?.normalizedValue ?? "",
+          m.imported?.nuclideCount ?? "",
           ...m.couplingsHz,
         ]);
     }

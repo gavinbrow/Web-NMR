@@ -15,7 +15,7 @@ Open the local URL printed by the development server. Build the static applicati
 ## Supported workflows
 
 - Import Bruker processed 2D NOESY/COSY planes (`2rr` and optional quadrants with `procs`/`proc2s`), rendered as signed contours with independent ppm axes, rectangle zoom, pan, threshold and figure/matrix export. Raw QF, States/States-TPPI and Echo-Antiecho data retain their acquisition source for axis-specific Fourier processing. QF has unavoidable indirect-axis mirrors.
-- Import Mnova 17 JSON documents (`.mnjs`) and JSON NMR datasets (`.json`), preserving processed spectra, available complex FIDs, complete comments, ordered stacks and the first view range. Native `.mnova` documents now open directly in the browser: modern 1D real/complex spectra and real-only processed 2D matrices retain saved samples, calibration, full comments and dataset membership. See [native reader capabilities and codec source](scripts/mnova-codec/README.md). Native stack display settings, raw source replay, page artwork and analysis annotations are not transferred; `.mnjs` remains useful for ordered stacks and available FIDs.
+- Import Mnova 17 JSON documents (`.mnjs`) and JSON NMR datasets (`.json`). Native `.mnova` documents open directly in the browser, retaining saved corrected 1D/2D samples, available complex FIDs and 2D spectral sources, calibration, titles/comments, saved integrals with native normalization, labeled peaks and multiplet regions/J values. Verified display records restore ppm/intensity bounds, colors, ordered stacks and hidden rows. Saved text reports are available in document details, and the original native file can be retained for unchanged download. See [native reader capabilities and codec source](scripts/mnova-codec/README.md) for precise dialect and missing-channel limits. Freeform page artwork and unverified individual stack gain fields are not reproduced.
 - Import Bruker 1D experiment folders or ZIP archives, including processed `1r`/`1i` and complex raw `fid` with parameters. Existing processed spectra are preferred and remain unchanged. Raw-only imports initialize supported saved apodization, zero-fill size and PHC0/PHC1 phase settings, with full fractional group-delay correction; missing vendor baseline models are not substituted automatically.
 - Import two-column ppm/intensity CSV, TSV, or text, optionally with a third imaginary column. Enter an observed nucleus and MHz frequency in the inspector when absent.
 - Import and export basic uncompressed AFFN JCAMP-DX in ppm. Unsupported compression or multidimensional data are reported explicitly.
@@ -31,23 +31,23 @@ The initial project contains six explicitly labelled **synthetic demonstration s
 
 ## Familiar shortcuts
 
-| Key | Action |
-| --- | --- |
-| Z | Horizontal zoom |
-| Space + drag | Pan |
-| I / Shift+I | Manual integrals / integral manager |
-| J / Shift+J | Manual multiplets / multiplet manager |
-| K / Ctrl or Cmd+K | Region peak picking / peak by peak |
-| L / R | Reference signal |
-| Shift+P | Manual phase |
-| B | Baseline method chooser with blue preview |
-| Shift+click | Select a range of spectra |
-| + / − | Increase / decrease display height |
-| Shift+Left / Right | Previous / next zoom |
-| Alt+Left / Right | Pan by a fixed amount |
-| Ctrl or Cmd+O / S | Open / save project |
-| Ctrl or Cmd+Z / Y | Undo / redo |
-| Escape | Cancel preview and return to selection |
+| Key                | Action                                    |
+| ------------------ | ----------------------------------------- |
+| Z                  | Horizontal zoom                           |
+| Space + drag       | Pan                                       |
+| I / Shift+I        | Manual integrals / integral manager       |
+| J / Shift+J        | Manual multiplets / multiplet manager     |
+| K / Ctrl or Cmd+K  | Region peak picking / peak by peak        |
+| L / R              | Reference signal                          |
+| Shift+P            | Manual phase                              |
+| B                  | Baseline method chooser with blue preview |
+| Shift+click        | Select a range of spectra                 |
+| + / −              | Increase / decrease display height        |
+| Shift+Left / Right | Previous / next zoom                      |
+| Alt+Left / Right   | Pan by a fixed amount                     |
+| Ctrl or Cmd+O / S  | Open / save project                       |
+| Ctrl or Cmd+Z / Y  | Undo / redo                               |
+| Escape             | Cancel preview and return to selection    |
 
 Core bindings were checked against [Mnova's official documentation](https://mestrelab.com/downloads/mnova/manuals/latest/shortcuts.html). Shortcuts do not intercept typing in fields. This version implements horizontal zoom and a red reference circle/line that snaps to individual peaks. Click to open the compact manual reference dialog; expand Solvents / standards for nucleus-specific presets. DMSO, Chloroform, TMS and D₂O appear first, followed by other solvents alphabetically. Ctrl/Cmd+Shift+Z is also accepted for redo.
 
@@ -57,7 +57,7 @@ Automated tests cover analytical DFT/FFT comparison, phase and baseline replay, 
 
 Automatic phase is a positive-absorption heuristic for routine positive 1D spectra. Automatic baseline methods include polynomial, Bernstein, Whittaker, splines, ablative shaving, arPLS and SNIP, plus clearly labelled independent joint phase/baseline adaptations for proprietary PcBc/apbk; broad or signed signals require manual review. Raw and vendor-processed amplitude scales are not assumed interchangeable for quantitative kinetics. Internal-standard kinetics reports area ratios corrected for proton count and optional concentrations from a known standard. Quantitative acquisition suitability must still be established. Numerical details are in [src/core/README.md](src/core/README.md).
 
-Native Varian/Agilent, JEOL, legacy/complex-2D Mnova native layouts, compressed JCAMP, unsupported raw 2D acquisition modes, 2D peak volumes, structure assignment, freeform publication page layouts, and higher-order multiplet simulation are outside this initial build. Imports are limited to 256 MB; transforms to about four million points. Local recovery keeps all open project documents and five recently closed documents in one workspace per browser origin. Delete an individual project or all saved projects from the recovery chooser; deletion removes open and recently closed recovery copies and prevents stale autosaves in another tab from resurrecting them. Saved files on your computer remain intact. Separate browser tabs share that recovery slot; portable projects provide independent backups.
+Native Varian/Agilent, JEOL, legacy Mnova native layouts, compressed JCAMP, unsupported raw 2D acquisition modes, 2D peak volumes, structure assignment, freeform publication page layouts, and higher-order multiplet simulation are outside this initial build. Imports are limited to 256 MB; transforms to about four million points. Local recovery keeps all open project documents and five recently closed documents in one workspace per browser origin. Delete an individual project or all saved projects from the recovery chooser; deletion removes open and recently closed recovery copies and prevents stale autosaves in another tab from resurrecting them. Saved files on your computer remain intact. Separate browser tabs share that recovery slot; portable projects provide independent backups.
 
 ## Structure
 

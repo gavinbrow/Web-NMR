@@ -90,6 +90,7 @@ export interface Peak {
   id: string;
   ppm: number;
   height: number;
+  label?: string;
 }
 export interface Integral {
   id: string;
@@ -97,6 +98,13 @@ export interface Integral {
   to: number;
   area: number;
   label: string;
+  /** Saved Mnova values use its own integration convention, separately from our signed ppm areas. */
+  imported?: {
+    source: "Mnova";
+    normalizedValue: number;
+    rawArea: number;
+    referenceArea: number;
+  };
 }
 export interface Multiplet {
   id: string;
@@ -107,6 +115,13 @@ export interface Multiplet {
   couplingsHz: number[];
   peakCount: number;
   label: string;
+  imported?: {
+    source: "Mnova";
+    normalizedValue: number;
+    rawArea: number;
+    referenceArea: number;
+    nuclideCount: number;
+  };
 }
 export interface TwoDSpectrum {
   /** F2 columns and F1 rows; both axes descend in ppm. */
@@ -149,6 +164,7 @@ export interface TwoDRawData {
   experiment: string;
 }
 export interface TwoDProcessingRecipe {
+  source?: "processed" | "mnova-source";
   echoAntiEchoOrder?: "echo-first" | "antiecho-first";
   transform: boolean;
   digitalFilter: boolean;
@@ -170,8 +186,12 @@ export interface TwoDView {
   leftSpectrumId?: string;
 }
 export interface Spectrum {
+  /** Saved individual document frame, in referenced ppm. */
+  savedView?: [number, number];
   twoD?: TwoDSpectrum;
   twoDOriginal?: TwoDSpectrum;
+  /** Separate saved source; never mixes source quadrature with corrected output. */
+  nativeSource2D?: TwoDSpectrum;
   twoDRaw?: TwoDRawData;
   twoDRecipe?: TwoDProcessingRecipe;
   twoDView?: TwoDView;
@@ -245,6 +265,8 @@ export interface KineticsConfiguration {
   };
 }
 export interface Project {
+  /** Original document is retained losslessly alongside the editable browser data. */
+  originalMnova?: { name: string; bytes: Uint8Array; importNotes: string[] };
   kinetics?: KineticsConfiguration;
   stacks?: SpectrumStack[];
   activeStackId?: string | null;

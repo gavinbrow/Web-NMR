@@ -6,6 +6,9 @@ export function shiftSpectrum(s: Spectrum, delta: number): Spectrum {
   return {
     ...s,
     referenceOffset: s.referenceOffset + delta,
+    ...(s.savedView
+      ? { savedView: s.savedView.map((v) => v + delta) as [number, number] }
+      : {}),
     recipe: {
       ...s.recipe,
       pivotPpm: s.recipe.pivotPpm + delta,

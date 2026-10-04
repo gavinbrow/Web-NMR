@@ -100,6 +100,7 @@ import { createDemoSpectra } from "./features/demo";
 import { droppedFiles } from "./features/dropFiles";
 import {
   downloadProject,
+  downloadBlob,
   loadProject,
   validateProject,
 } from "./features/project";
@@ -614,6 +615,9 @@ export default function App() {
     [warnings, setWarnings] = useState<string[]>([]),
     [dragOver, setDragOver] = useState(false),
     [cursor, setCursor] = useState<number | null>(null);
+  const [originalMnova, setOriginalMnova] =
+      useState<Project["originalMnova"]>(),
+    [mnovaDetailsOpen, setMnovaDetailsOpen] = useState(false);
   const [draft, setDraft] = useState<ProcessingRecipe>(defaultRecipe()),
     [preview, setPreview] = useState<Spectrum["data"] | null>(null),
     [scope, setScope] = useState<"active" | "selected" | "all">("active");
@@ -787,6 +791,7 @@ export default function App() {
   );
   const project = (): Project => ({
     version: 1,
+    originalMnova,
     kinetics: kineticsConfiguration(),
     stacks,
     activeStackId,
@@ -865,6 +870,7 @@ export default function App() {
     setContextMenu(null);
     setIntegralEdit(null);
     setPropertiesOpen(false);
+    setMnovaDetailsOpen(false);
     setInspectorOpen(false);
     setWarnings([]);
     setFilter("");
@@ -1349,7 +1355,11 @@ export default function App() {
       selectionAnchor.current = id;
     }
     const next = spectra.find((s) => s.id === id);
-    if (
+    const saved = navigatorViews[id]?.view ?? next?.savedView;
+    if (next && saved && !preserveStack) {
+      setView(saved);
+      setPlotGain(navigatorViews[id]?.gain ?? 1);
+    } else if (
       next &&
       active &&
       (next.nucleus !== active.nucleus || !!next.twoD !== !!active.twoD)
@@ -1378,6 +1388,7 @@ export default function App() {
     if (t === "peak") setTable("Peaks");
   }
   function restoreProjectState(p: Project) {
+    setOriginalMnova(p.originalMnova);
     restoreKinetics(p.kinetics);
     setSpectra(p.spectra);
     setStacks(p.stacks ?? []);
@@ -1397,7 +1408,11 @@ export default function App() {
     setHistoryVersion((n) => n + 1);
     setRecovery(null);
     setReady(true);
-    notify(`Opened ${p.name}`);
+    notify(
+      p.originalMnova
+        ? `Opened ${p.name} · ${p.spectra.length} spectra · ${p.spectra.reduce((n, s) => n + s.integrals.length, 0)} integrals`
+        : `Opened ${p.name}`,
+    );
   }
   async function openFiles(files: File[], attachTo2DId?: string) {
     if (!files.length || busy) return;
@@ -1421,6 +1436,9 @@ export default function App() {
                   "No supported spectra found in the Mnova document.",
               );
             const first = imported.spectra[0];
+            const firstStack = imported.stacks?.find((st) =>
+              st.spectrumIds.includes(first.id),
+            );
             project = {
               ...createBlankProject(
                 imported.projectName ||
@@ -1430,6 +1448,17 @@ export default function App() {
               activeId: first.id,
               stacks: imported.stacks ?? [],
               view: imported.view ?? extent(first.data, first.referenceOffset),
+              displayMode: firstStack ? "stack" : "single",
+              activeStackId: firstStack?.id ?? null,
+              ...(/\.mnova$/i.test(file.name)
+                ? {
+                    originalMnova: {
+                      name: file.name,
+                      bytes: new Uint8Array(await file.arrayBuffer()),
+                      importNotes: imported.warnings,
+                    },
+                  }
+                : {}),
             };
             notes.push(...imported.warnings);
           }
@@ -2229,7 +2258,7 @@ export default function App() {
     setFitEnabled(false);
     setHandAlign(false);
     const s = spectra.find((s) => s.id === st.spectrumIds[0]);
-    if (s) setView(extent(s.data, s.referenceOffset));
+    if (s) setView(s.savedView ?? extent(s.data, s.referenceOffset));
   }
   function shiftMember(id: string, delta: number) {
     if (busy) return;
@@ -2736,6 +2765,7 @@ export default function App() {
       if (e.key === "Escape") {
         e.preventDefault();
         if (spectrumExportOpen) setSpectrumExportOpen(false);
+        else if (mnovaDetailsOpen) setMnovaDetailsOpen(false);
         else if (referencePosition !== null) setReferencePosition(null);
         else if (twoDReference) setTwoDReference(null);
         else if (integralEdit) setIntegralEdit(null);
@@ -2756,7 +2786,8 @@ export default function App() {
         kinSettingsOpen ||
         referencePosition !== null ||
         twoDReference ||
-        spectrumExportOpen
+        spectrumExportOpen ||
+        mnovaDetailsOpen
       )
         return;
       if (baselineOpen && k !== "b") return;
@@ -3120,7 +3151,7 @@ export default function App() {
           ? largestArea / stats.area
           : 1;
     return {
-      view: settings?.view ?? extent(s.data, s.referenceOffset),
+      view: settings?.view ?? s.savedView ?? extent(s.data, s.referenceOffset),
       gain: ((settings?.gain ?? 1) * s.gain * norm * stats.max) / largest,
       component: settings?.component ?? ("real" as const),
     };
@@ -3505,6 +3536,16 @@ export default function App() {
               />
               <span className="group-label">Manage</span>
             </div>
+            {originalMnova && (
+              <div className="ribbon-group">
+                <RibbonButton
+                  icon={FileText}
+                  label="Mnova document"
+                  onClick={() => setMnovaDetailsOpen(true)}
+                />
+                <span className="group-label">Imported document</span>
+              </div>
+            )}
           </>
         ) : (
           <>
@@ -4369,6 +4410,7 @@ export default function App() {
                             <th>#</th>
                             <th>δ (ppm)</th>
                             <th>Height (a.u.)</th>
+                            <th>Annotation</th>
                             <th>Actions</th>
                           </tr>
                         </thead>
@@ -4387,6 +4429,7 @@ export default function App() {
                                 </button>
                               </td>
                               <td>{p.height.toPrecision(6)}</td>
+                              <td>{p.label || "—"}</td>
                               <td>
                                 <button
                                   className="icon-button"
@@ -4481,6 +4524,8 @@ export default function App() {
                             <th>Pattern</th>
                             <th>J (Hz)</th>
                             <th>Lines</th>
+                            <th>Saved integral</th>
+                            <th>Nuclides</th>
                             <th />
                           </tr>
                         </thead>
@@ -4536,6 +4581,10 @@ export default function App() {
                                   .join(", ") || "—"}
                               </td>
                               <td>{m.peakCount}</td>
+                              <td>
+                                {m.imported?.normalizedValue.toFixed(3) ?? "—"}
+                              </td>
+                              <td>{m.imported?.nuclideCount ?? "—"}</td>
                               <td>
                                 <button
                                   className="icon-button"
@@ -5648,7 +5697,7 @@ export default function App() {
             aria-label="Import report"
           >
             <div className="modal-title">
-              <h2>Import report</h2>
+              <h2>Some imported items need attention</h2>
               <button
                 className="icon-button"
                 aria-label="Close import report"
@@ -5663,15 +5712,89 @@ export default function App() {
               ))}
             </ul>
             <p>
-              Supported here: Bruker 1D and 2D (including COSY and NOESY), saved
-              1D and real-only processed 2D spectra in supported native Mnova
-              documents (.mnova), Mnova JSON documents (.mnjs), supported
-              JCAMP-DX, CSV and TSV. Import the complete experiment folder or
-              ZIP, including pdata. Unknown native document versions are
-              reported explicitly.
+              Your successfully imported spectra remain available. For Mnova
+              documents, the complete original file is also retained in the
+              project.
             </p>
             <button className="primary" onClick={() => setWarnings([])}>
               Continue
+            </button>
+          </div>
+        </div>
+      )}
+      {mnovaDetailsOpen && originalMnova && (
+        <div
+          className="modal-backdrop"
+          onClick={() => setMnovaDetailsOpen(false)}
+        >
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Mnova document details"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setMnovaDetailsOpen(false);
+            }}
+          >
+            <div className="modal-title">
+              <h2>Mnova document</h2>
+              <button
+                className="icon-button"
+                aria-label="Close Mnova document details"
+                onClick={() => setMnovaDetailsOpen(false)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <p>{originalMnova.name}</p>
+            <dl className="kv">
+              <dt>Spectra</dt>
+              <dd>{spectra.length}</dd>
+              <dt>Integral regions</dt>
+              <dd>{spectra.reduce((n, s) => n + s.integrals.length, 0)}</dd>
+              <dt>Picked peaks</dt>
+              <dd>{spectra.reduce((n, s) => n + s.peaks.length, 0)}</dd>
+              <dt>Multiplets</dt>
+              <dd>{spectra.reduce((n, s) => n + s.multiplets.length, 0)}</dd>
+              <dt>Stacks</dt>
+              <dd>{stacks.length}</dd>
+              <dt>Original FIDs</dt>
+              <dd>{spectra.filter((s) => s.fid).length}</dd>
+            </dl>
+            {originalMnova.importNotes.length > 0 && (
+              <ul className="warning-list">
+                {originalMnova.importNotes.map((note, i) => (
+                  <li key={i}>{note}</li>
+                ))}
+              </ul>
+            )}
+            {spectra
+              .filter((s) => s.metadata.mnovaReportText)
+              .map((s) => (
+                <details key={s.id}>
+                  <summary>Saved report · {s.label}</summary>
+                  <p style={{ whiteSpace: "pre-wrap" }}>
+                    {String(s.metadata.mnovaReportText)}
+                  </p>
+                </details>
+              ))}
+            <p>
+              The original document is kept byte for byte in local recovery and
+              saved Web NMR projects. Export the original to reopen its complete
+              layout and other Mnova objects in Mnova.
+            </p>
+            <button
+              onClick={() =>
+                downloadBlob(
+                  new Blob([originalMnova.bytes.slice().buffer], {
+                    type: "application/octet-stream",
+                  }),
+                  originalMnova.name,
+                )
+              }
+            >
+              <Download size={16} /> Export original Mnova file
             </button>
           </div>
         </div>

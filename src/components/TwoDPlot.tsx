@@ -42,9 +42,27 @@ export function initialTwoDView(s: Spectrum, saved?: TwoDView): TwoDView {
     samples.push(Math.abs(m.real[i]));
   samples.sort((a, b) => a - b);
   const sigma = (samples[Math.floor(samples.length / 2)] || 0) / 0.67449;
+  const nativeYHigh = s.metadata.mnovaViewF1High,
+    nativeYLow = s.metadata.mnovaViewF1Low;
+  const savedY =
+    typeof nativeYHigh === "number" &&
+    typeof nativeYLow === "number" &&
+    Number.isFinite(nativeYHigh) &&
+    Number.isFinite(nativeYLow) &&
+    nativeYHigh > nativeYLow
+      ? ([
+          nativeYHigh + m.referenceOffsetF1,
+          nativeYLow + m.referenceOffsetF1,
+        ] as [number, number])
+      : undefined;
   return {
-    xView: [m.x[0] + s.referenceOffset, m.x.at(-1)! + s.referenceOffset],
-    yView: [m.y[0] + m.referenceOffsetF1, m.y.at(-1)! + m.referenceOffsetF1],
+    xView: s.savedView
+      ? [s.savedView[0] + s.referenceOffset, s.savedView[1] + s.referenceOffset]
+      : [m.x[0] + s.referenceOffset, m.x.at(-1)! + s.referenceOffset],
+    yView: savedY ?? [
+      m.y[0] + m.referenceOffsetF1,
+      m.y.at(-1)! + m.referenceOffsetF1,
+    ],
     threshold: Math.min(80, Math.max(1, (500 * sigma) / (max || 1))),
     negative: m.mode !== "magnitude",
     topGain: 1,

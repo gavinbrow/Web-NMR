@@ -60,8 +60,8 @@ export function analysisCSV(
   // Analysis objects already store the displayed, referenced coordinates.
   if (type === "peaks")
     return makeCSV([
-      ["id", "ppm", "height"],
-      ...s.peaks.map((p) => [p.id, p.ppm, p.height]),
+      ["id", "ppm", "height", "annotation"],
+      ...s.peaks.map((p) => [p.id, p.ppm, p.height, p.label || ""]),
     ]);
   if (type === "integrals")
     return makeCSV([

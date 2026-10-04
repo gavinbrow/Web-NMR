@@ -241,7 +241,7 @@ export function SpectrumPlot(p: Props) {
       let norm = 1;
       if (p.normalization === "maximum") norm = largest / st.max;
       if (p.normalization === "area") norm = largestArea / st.area;
-      const base =
+      let base =
         p.mode === "stack" && !isFid
           ? pad.t +
             ph -
@@ -253,7 +253,7 @@ export function SpectrumPlot(p: Props) {
         max = 0;
         for (const z of yy) max = Math.max(max, Math.abs(z));
       }
-      const scale =
+      let scale =
         ((p.mode === "stack" && !isFid
           ? (ph / Math.max(1, all.length)) * 0.72
           : ph * 0.7) /
@@ -261,6 +261,23 @@ export function SpectrumPlot(p: Props) {
         norm *
         s.gain *
         p.gain;
+      const nativeMin = s.metadata.mnovaIntensityMin,
+        nativeMax = s.metadata.mnovaIntensityMax;
+      if (
+        !isFid &&
+        p.mode === "single" &&
+        typeof nativeMin === "number" &&
+        typeof nativeMax === "number" &&
+        Number.isFinite(nativeMin) &&
+        Number.isFinite(nativeMax) &&
+        nativeMax > nativeMin
+      ) {
+        // Retain the saved intensity axis instead of refitting native documents
+        // to the highest peak. Display gain remains a reversible multiplier.
+        const range = nativeMax - nativeMin;
+        base = pad.t + ph * (1 + nativeMin / range);
+        scale = (ph / range) * s.gain * p.gain;
+      }
       const horizontalOffset =
         p.mode === "stack" ? i * a.stackHorizontalOffset : 0;
       const points = decimate(xx, yy, offset, v, pw).map(
@@ -1239,12 +1256,13 @@ export function SpectrumPlot(p: Props) {
                       : p.properties.peakColor
                   }
                 >
-                  {(
-                    a.ppm *
-                    (p.properties.peakUnits === "Hz"
-                      ? p.active.frequencyMHz
-                      : 1)
-                  ).toFixed(p.properties.peakDecimals)}
+                  {a.label ||
+                    (
+                      a.ppm *
+                      (p.properties.peakUnits === "Hz"
+                        ? p.active.frequencyMHz
+                        : 1)
+                    ).toFixed(p.properties.peakDecimals)}
                 </text>
               )}
             </g>

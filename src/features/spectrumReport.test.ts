@@ -56,6 +56,24 @@ function readCell(source: string, reference: string): string {
 const numeric = (source: string, reference: string) =>
   Number(readCell(source, reference).match(/<v>(.*?)<\/v>/)?.[1]);
 describe("Excel spectrum report", () => {
+  it("exports saved native normalized values independently of the browser's area convention", () => {
+    const s = fixture();
+    s.integrals[0].imported = {
+      source: "Mnova",
+      normalizedValue: 3.14159,
+      rawArea: 100,
+      referenceArea: 31.8309886,
+    };
+    s.peaks[0].label = "Alpha";
+    const files = unzipSync(
+      buildSpectrumWorkbook(s, { includeFigure: false, includePeaks: true }),
+    );
+    const analysis = strFromU8(files["xl/worksheets/sheet2.xml"]);
+    expect(numeric(analysis, "F8")).toBe(3.14159);
+    expect(readCell(analysis, "F8")).not.toContain("<f>");
+    expect(analysis).toContain("Alpha");
+    expect(analysis).toContain("saved Mnova normalized values");
+  });
   it("exports the actual corrected trace and referenced ppm, excluding display gain and immutable originals", () => {
     const s = fixture(),
       copy = s.data.real.slice(),

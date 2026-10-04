@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { readFileSync } from "node:fs";
 import { importMnovaNative, setNativeCodecForTests } from "./mnovaNative";
+import { defaultTwoDRecipe, processTwoD } from "./twoDProcessing";
 const merge = (...parts: Uint8Array[]) => {
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
   let at = 0;
@@ -63,11 +64,12 @@ function record(
   n = real.length,
   twoD: boolean | [number, number] = false,
   endian = 1,
+  hyper?: { imagF1: number[]; imagBoth: number[] },
 ) {
   const scalar = axis(1, "Unknown", 0, 1000),
     dims = twoD
       ? merge(
-          scalar,
+          hyper ? axis(2, "Unknown", 0, 1000) : scalar,
           axis(Array.isArray(twoD) ? twoD[1] : 2, "13C", -100, 2000, 100),
           axis(Array.isArray(twoD) ? twoD[0] : 3, "1H", -400, 4000, 400),
           scalar,
@@ -79,11 +81,19 @@ function record(
   let payload: Uint8Array;
   if (compressed) payload = compressed;
   else {
-    payload = new Uint8Array(n * (imag ? 2 : 1) * 4);
+    payload = new Uint8Array(n * (imag ? 2 : 1) * (hyper ? 2 : 1) * 4);
     const v = new DataView(payload.buffer);
     for (let i = 0; i < n; i++) {
-      v.setFloat32(i * (imag ? 2 : 1) * 4, real[i], endian === 1);
-      if (imag) v.setFloat32(i * 8 + 4, imag[i], endian === 1);
+      const width = Array.isArray(twoD) ? twoD[0] : 3,
+        at = hyper
+          ? (Math.floor(i / width) * 2 * width + (i % width)) * 8
+          : i * (imag ? 2 : 1) * 4;
+      v.setFloat32(at, real[i], endian === 1);
+      if (imag) v.setFloat32(at + 4, imag[i], endian === 1);
+      if (hyper) {
+        v.setFloat32(at + width * 8, hyper.imagF1[i], endian === 1);
+        v.setFloat32(at + width * 8 + 4, hyper.imagBoth[i], endian === 1);
+      }
     }
   }
   const data = merge(u32(payload.length), new Uint8Array([endian]), payload),
@@ -216,6 +226,62 @@ describe("native Mnova bounded dialect", () => {
     expect([...p.y]).toEqual([19, 9]);
     expect([...p.real]).toEqual(values);
     expect([...s.data.real]).toEqual([4, 5, 6]);
+    expect(result.warnings[0]).toContain("without imaginary channels");
+    expect(s.nativeSource2D?.real).toEqual(p.real);
+  });
+  it("restores exact four native row-paired quadrants and independently phases each axis from the corrected source", async () => {
+    const rr = [1, 2, 3, 4, 5, 6],
+      ri = [-2, 4, 6, -8, 10, 12],
+      ir = [11, 13, -15, 17, 19, -21],
+      ii = [31, -33, 35, -37, 39, -41];
+    const r = record(rr, ri, undefined, 6, [3, 2], 0, {
+      imagF1: ir,
+      imagBoth: ii,
+    });
+    const imported = await importMnovaNative(buffer(doc([r, r]))),
+      s = imported.spectra[0],
+      p = s.twoD!;
+    expect([...p.real]).toEqual(rr);
+    expect([...p.imagF2!]).toEqual(ri);
+    expect([...p.imagF1!]).toEqual(ir);
+    expect([...p.imagBoth!]).toEqual(ii);
+    expect(imported.warnings).toEqual([]);
+    expect(s.nativeSource2D?.imagBoth).toEqual(p.imagBoth);
+    s.twoDRecipe = defaultTwoDRecipe(s);
+    s.twoDRecipe.f2.ph0 = 90;
+    const f2 = processTwoD(s).data;
+    for (let i = 0; i < 6; i++) expect(f2.real[i]).toBeCloseTo(-ri[i], 12);
+    s.twoDRecipe.f2.ph0 = 0;
+    s.twoDRecipe.f1.ph0 = 90;
+    const f1 = processTwoD(s).data;
+    for (let i = 0; i < 6; i++) expect(f1.real[i]).toBeCloseTo(-ir[i], 12);
+    s.twoDRecipe.f2.ph0 = 90;
+    const both = processTwoD(s).data;
+    for (let i = 0; i < 6; i++) expect(both.real[i]).toBeCloseTo(ii[i], 12);
+    expect([...p.real]).toEqual(rr);
+  });
+  it("decodes all four independently compressed hypercomplex channels with exact framing", async () => {
+    const stored = readFileSync(
+        new URL("./fixtures/mnova-synthetic-compressed.bin", import.meta.url),
+      ),
+      v = new DataView(stored.buffer, stored.byteOffset, stored.byteLength),
+      end = 29 + v.getUint32(25, false),
+      channel = stored.subarray(17, end);
+    const quad = merge(
+        stored.subarray(0, 17),
+        channel,
+        channel,
+        new Uint8Array([1]),
+        channel,
+        channel,
+      ),
+      n = 4096;
+    const hyper = { imagF1: Array(n).fill(0), imagBoth: Array(n).fill(0) },
+      r = record([], Array(n).fill(0), quad, n, [4096, 1], 1, hyper);
+    const p = (await importMnovaNative(buffer(doc([r, r])))).spectra[0].twoD!;
+    expect(p.imagF2).toEqual(p.real);
+    expect(p.imagF1).toEqual(p.real);
+    expect(p.imagBoth).toEqual(p.real);
   });
   it("rejects a JPEG matrix shape that disagrees with the separate axes even when its total sample count matches", async () => {
     const encoded = readFileSync(

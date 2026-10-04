@@ -1,3 +1,17 @@
+import {
+  NativeReader as Reader,
+  nativeMatches as matches,
+} from "./mnovaNativeReader";
+import {
+  decodeNativeIntegrals,
+  decodeNativePeaks,
+  decodeNativeMultiplets,
+} from "./mnovaNativeAnalysis";
+import {
+  decodeNativeDocumentFrame,
+  decodeNativeStackDisplay,
+  decodeNativeTextReports,
+} from "./mnovaNativeDocument";
 import { maximumProjection } from "./twoD";
 import {
   colors,
@@ -6,6 +20,7 @@ import {
   type ImportResult,
   type Spectrum,
   type SpectrumStack,
+  type TwoDSpectrum,
 } from "../model";
 import initCodec, { type DecoderModule } from "./mnovaCodec/openjpeg.mjs";
 import wasmUrl from "./mnovaCodec/openjpeg.wasm?url";
@@ -29,65 +44,6 @@ export function setNativeCodecForTests(binary: Uint8Array): void {
 }
 function getCodec() {
   return (codec ??= initCodec({ locateFile: () => wasmUrl }));
-}
-class Reader {
-  view: DataView;
-  bytes: Uint8Array;
-  at: number;
-  end: number;
-  constructor(bytes: Uint8Array, at = 0, end = bytes.length) {
-    this.bytes = bytes;
-    this.at = at;
-    this.end = end;
-    this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  }
-  need(n: number) {
-    if (!Number.isSafeInteger(n) || n < 0 || this.at + n > this.end)
-      throw Error("Truncated Mnova native record.");
-  }
-  u8() {
-    this.need(1);
-    return this.bytes[this.at++];
-  }
-  u32() {
-    this.need(4);
-    const n = this.view.getUint32(this.at, false);
-    this.at += 4;
-    return n;
-  }
-  f32() {
-    this.need(4);
-    const n = this.view.getFloat32(this.at, false);
-    this.at += 4;
-    if (!Number.isFinite(n)) throw Error("Non-finite Mnova value.");
-    return n;
-  }
-  f64() {
-    this.need(8);
-    const n = this.view.getFloat64(this.at, false);
-    this.at += 8;
-    if (!Number.isFinite(n)) throw Error("Non-finite Mnova value.");
-    return n;
-  }
-  block() {
-    const n = this.u32();
-    this.need(n);
-    return new Reader(this.bytes, this.at, this.at + n);
-  }
-  text() {
-    const n = this.u32();
-    if (n === 0xffffffff) return "";
-    if (n > 200_000 || n % 2) throw Error("Invalid Mnova text length.");
-    this.need(n);
-    const t = utf16.decode(this.bytes.subarray(this.at, this.at + n));
-    this.at += n;
-    return t.replace(/\r\n?/g, "\n");
-  }
-}
-function matches(b: Uint8Array, at: number, s: Uint8Array) {
-  if (at < 0 || at + s.length > b.length) return false;
-  for (let i = 0; i < s.length; i++) if (b[at + i] !== s[i]) return false;
-  return true;
 }
 interface Dimension {
   end: number;
@@ -113,11 +69,11 @@ function dimension(b: Uint8Array, start: number): Dimension {
     r.u8() !== 1
   )
     throw Error("Unsupported Mnova dimensional record version.");
-  const delay = r.f64(),
-    lower = r.f64(),
+  r.f64(); // Legacy reference/shift field; group delay is the fifth double.
+  const lower = r.f64(),
     frequency = r.f64(),
-    width = r.f64();
-  r.f64();
+    width = r.f64(),
+    delay = r.f64();
   const phase0 = r.f64(),
     phase1 = r.f64();
   r.f32();
@@ -161,6 +117,7 @@ interface ArrayRecord {
   bytes: Uint8Array;
   endian: number;
   dimensionality: number;
+  domain: number;
 }
 function arrayRecord(b: Uint8Array, start: number): ArrayRecord {
   const original: Dimension[] = [];
@@ -186,8 +143,12 @@ function arrayRecord(b: Uint8Array, start: number): ArrayRecord {
     dimensions.push(d);
     at = d.end;
   }
-  // Unused dimensions must remain scalar in this explicitly supported 1D dialect.
-  if (dimensions.some((d, i) => (i === 0 || i > dimensionality) && d.n !== 1))
+  // Hypercomplex 2D uses dimension zero as an explicit two-component F1 row index.
+  if (
+    dimensions.some((d, i) => i > dimensionality && d.n !== 1) ||
+    (dimensions[0].n !== 1 &&
+      !(dimensionality === 2 && !realOnly && dimensions[0].n === 2))
+  )
     throw Error("Unsupported native Mnova dimension layout.");
   const outer = new Reader(b, at).block();
   if (outer.u32() !== 0 || outer.u8() !== 1)
@@ -202,6 +163,10 @@ function arrayRecord(b: Uint8Array, start: number): ArrayRecord {
   if (data.end !== outer.end) throw Error("Unsupported Mnova array extension.");
   return {
     start,
+    domain: new DataView(b.buffer, b.byteOffset, b.byteLength).getUint32(
+      start - 4,
+      false,
+    ),
     dimensionality,
     end: outer.end,
     dimensions,
@@ -276,19 +241,18 @@ async function decodeChannel(
     if (encoded) m._free(encoded);
   }
 }
-async function samples(
-  record: ArrayRecord,
-): Promise<{ real: Float64Array; imag?: Float64Array }> {
+async function samples(record: ArrayRecord): Promise<{
+  real: Float64Array;
+  imag?: Float64Array;
+  imagF1?: Float64Array;
+  imagBoth?: Float64Array;
+}> {
   const count =
     record.dimensions[1].n *
     (record.dimensionality === 2 ? record.dimensions[2].n : 1);
   if (count > MAX_POINTS)
     throw Error(
       "Native Mnova plane exceeds the 4 million point decoder limit.",
-    );
-  if (record.dimensionality === 2 && !record.realOnly)
-    throw Error(
-      "Native complex 2D layout is not supported yet; real-only processed 2D is supported.",
     );
   if (record.compressed) {
     const r = new Reader(record.bytes);
@@ -306,15 +270,17 @@ async function samples(
       r.f32();
       if (r.u32() !== 0) throw Error("Unexpected complex Mnova channel.");
     }
-    // Legacy min/max tail repeats the normalization values; it is not another spectrum.
-    if (r.end - r.at !== 1)
-      throw Error("Unsupported Mnova compression extension.");
-    if (r.u8() !== 0)
-      throw Error("Unsupported hypercomplex native Mnova data.");
-    return { real, imag };
+    const hyper = r.u8();
+    if (hyper > 1 || !!hyper !== (record.dimensions[0].n === 2))
+      throw Error("Native Mnova hypercomplex flag disagrees with calibration.");
+    const imagF1 = hyper ? await decodeChannel(r, count, shape) : undefined,
+      imagBoth = hyper ? await decodeChannel(r, count, shape) : undefined;
+    if (r.at !== r.end) throw Error("Unsupported Mnova compression extension.");
+    return { real, imag, imagF1, imagBoth };
   }
   const channels = record.realOnly ? 1 : 2;
-  if (record.bytes.length !== count * channels * 4)
+  const hyper = record.dimensions[0].n === 2;
+  if (record.bytes.length !== count * channels * (hyper ? 2 : 1) * 4)
     throw Error("Mnova native sample count does not match calibration.");
   const v = new DataView(
       record.bytes.buffer,
@@ -322,14 +288,37 @@ async function samples(
       record.bytes.byteLength,
     ),
     real = new Float64Array(count),
-    imag = record.realOnly ? undefined : new Float64Array(count);
+    imag = record.realOnly ? undefined : new Float64Array(count),
+    imagF1 = hyper ? new Float64Array(count) : undefined,
+    imagBoth = hyper ? new Float64Array(count) : undefined,
+    width = record.dimensions[2].n;
   for (let i = 0; i < count; i++) {
-    real[i] = v.getFloat32(i * channels * 4, record.endian === 1);
-    if (imag) imag[i] = v.getFloat32((i * 2 + 1) * 4, record.endian === 1);
-    if (!Number.isFinite(real[i]) || (imag && !Number.isFinite(imag[i])))
+    // Native hypercomplex rows alternate F1 real/imaginary; within each row F2 is complex-interleaved.
+    const nativeIndex = hyper
+      ? (2 * Math.floor(i / width) * width + (i % width)) * 2
+      : i * channels;
+    real[i] = v.getFloat32(nativeIndex * 4, record.endian === 1);
+    if (imag)
+      imag[i] = v.getFloat32((nativeIndex + 1) * 4, record.endian === 1);
+    if (imagF1 && imagBoth) {
+      imagF1[i] = v.getFloat32(
+        (nativeIndex + width * 2) * 4,
+        record.endian === 1,
+      );
+      imagBoth[i] = v.getFloat32(
+        (nativeIndex + width * 2 + 1) * 4,
+        record.endian === 1,
+      );
+    }
+    if (
+      !Number.isFinite(real[i]) ||
+      (imag && !Number.isFinite(imag[i])) ||
+      (imagF1 && !Number.isFinite(imagF1[i])) ||
+      (imagBoth && !Number.isFinite(imagBoth[i]))
+    )
       throw Error("Non-finite native Mnova sample.");
   }
-  return { real, imag };
+  return { real, imag, imagF1, imagBoth };
 }
 /** Recognize parameter text only when its value, identifier, name and compatibility frames all agree. */
 function parameterText(
@@ -396,6 +385,7 @@ export async function importMnovaNative(
   const spectra: Spectrum[] = [],
     stacks: SpectrumStack[] = [],
     warnings: string[] = [];
+  const textReports = decodeNativeTextReports(b);
   for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
     const from = items[itemIndex],
       to = items[itemIndex + 1] ?? b.length,
@@ -421,6 +411,7 @@ export async function importMnovaNative(
       }
     if (!records.length || records.length % 2)
       throw Error("Unsupported native Mnova processed/source record layout.");
+    const frame = decodeNativeDocumentFrame(b, from, records[0].start);
     const members: Spectrum[] = [];
     for (let i = 0; i < records.length; i += 2) {
       const record = records[i],
@@ -430,7 +421,7 @@ export async function importMnovaNative(
             record.dimensions[1].n *
             (record.dimensionality === 2 ? record.dimensions[2].n : 1);
           retainedBytes +=
-            count * 8 * (record.realOnly ? 1 : 2) +
+            count * 8 * (record.realOnly ? 1 : 2 * record.dimensions[0].n) +
             (d.n + (record.dimensionality === 2 ? record.dimensions[1].n : 0)) *
               16;
           if (count > MAX_POINTS || retainedBytes > 160 * 1024 * 1024)
@@ -457,6 +448,9 @@ export async function importMnovaNative(
                     (f1.lower + ((f1.n - j) * f1.width) / f1.n) / f1.frequency,
                 ),
                 real: values.real,
+                imagF2: values.imag,
+                imagF1: values.imagF1,
+                imagBoth: values.imagBoth,
                 width: d.n,
                 height: f1.n,
                 nucleusF1: f1.nucleus,
@@ -508,15 +502,162 @@ export async function importMnovaNative(
           "Imported native Mnova stored processed samples; saved corrections retained",
         ],
       };
+      const source = records[i + 1];
+      if (source.domain === 1 && source.dimensionality === 1) {
+        retainedBytes += source.dimensions[1].n * 16;
+        if (retainedBytes > 160 * 1024 * 1024)
+          throw Error(
+            "Native Mnova decoded arrays exceed the 160 MB local limit.",
+          );
+        const rawValues = await samples(source),
+          sd = source.dimensions[1];
+        if (!rawValues.imag)
+          warnings.push(
+            `${spectrum.label}: the saved FID has no imaginary channel; raw reprocessing was not enabled.`,
+          );
+        else {
+          spectrum.fid = {
+            real: rawValues.real,
+            imag: rawValues.imag,
+            dwellSeconds: 1 / sd.width,
+            groupDelay: sd.delay,
+            carrierPpm: (sd.lower + sd.width / 2) / sd.frequency,
+            spectralWidthHz: sd.width,
+          };
+          spectrum.metadata.mnovaRawSource = "Saved native complex FID";
+          spectrum.history.push(
+            "Restored saved complex FID; current processed corrections were not replayed",
+          );
+        }
+      }
+      if (source.domain === 0 && source.dimensionality === 2) {
+        const sourceCount = source.dimensions[1].n * source.dimensions[2].n;
+        retainedBytes +=
+          sourceCount * 8 * (source.realOnly ? 1 : 2 * source.dimensions[0].n);
+        if (retainedBytes > 160 * 1024 * 1024)
+          throw Error(
+            "Native Mnova decoded arrays exceed the 160 MB local limit.",
+          );
+        const rawValues = await samples(source),
+          f2 = source.dimensions[2],
+          f1 = source.dimensions[1];
+        spectrum.nativeSource2D = {
+          x: Float64Array.from(
+            { length: f2.n },
+            (_, j) =>
+              (f2.lower + ((f2.n - j) * f2.width) / f2.n) / f2.frequency,
+          ),
+          y: Float64Array.from(
+            { length: f1.n },
+            (_, j) =>
+              (f1.lower + ((f1.n - j) * f1.width) / f1.n) / f1.frequency,
+          ),
+          real: rawValues.real,
+          imagF2: rawValues.imag,
+          imagF1: rawValues.imagF1,
+          imagBoth: rawValues.imagBoth,
+          width: f2.n,
+          height: f1.n,
+          nucleusF1: f1.nucleus,
+          frequencyF1: f1.frequency,
+          referenceOffsetF1: 0,
+          experiment: "Mnova saved source 2D",
+          source: "Mnova native processed 2D",
+          mode: "absorption",
+        } satisfies TwoDSpectrum;
+        spectrum.metadata.mnovaSource2D =
+          "Stored spectral source before saved corrections; explicit reprocessing source";
+      }
+      if (twoD && !values.imag)
+        warnings.push(
+          `${spectrum.label}: this native 2D processed plane was saved without imaginary channels; exact complex phase correction is unavailable for that plane.`,
+        );
+      if (source.domain === 1 && source.dimensionality === 2)
+        warnings.push(
+          `${spectrum.label}: a native 2D time-domain source is present, but its acquisition quadrature settings cannot be decoded by this native dialect; its processed 2D plane was retained.`,
+        );
+      if (!twoD) {
+        const restoreAnnotation = (kind: string, restore: () => void) => {
+          try {
+            restore();
+          } catch (error) {
+            warnings.push(
+              `${spectrum.label}: saved ${kind} could not be restored: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        };
+        restoreAnnotation("integrals", () => {
+          const analysis = decodeNativeIntegrals(b, {
+            from: metadataFrom,
+            to: record.start,
+            data,
+            referenceOffset: 0,
+          });
+          spectrum.integrals = analysis.integrals;
+          warnings.push(
+            ...analysis.warnings.map((w) => `${spectrum.label}: ${w}`),
+          );
+        });
+        restoreAnnotation("multiplets", () => {
+          const multiplets = decodeNativeMultiplets(b, {
+            from: metadataFrom,
+            to: record.start,
+            data,
+            referenceOffset: 0,
+            previousSourceEnd: i > 0 ? records[i - 1].end : undefined,
+          });
+          spectrum.multiplets = multiplets.multiplets;
+          warnings.push(
+            ...multiplets.warnings.map((w) => `${spectrum.label}: ${w}`),
+          );
+        });
+        const annotationTo = records[i + 2] ? records[i + 2].start - 17 : to;
+        if (source.end < annotationTo)
+          restoreAnnotation("peaks", () => {
+            spectrum.peaks = decodeNativePeaks(b, {
+              from: source.end,
+              to: annotationTo,
+            });
+          });
+      }
+      if (frame) {
+        spectrum.savedView = frame.xView;
+        spectrum.color = frame.color ?? spectrum.color;
+        Object.assign(spectrum.metadata, frame.metadata);
+      }
       spectra.push(spectrum);
       members.push(spectrum);
+    }
+    const reports = textReports.filter((r) => r.offset > from && r.offset < to);
+    if (reports.length && members.length) {
+      const metadata = members[0].metadata;
+      metadata.mnovaReportText = reports.map((r) => r.text).join("\n\n");
+      metadata.mnovaReportHTML = reports.map((r) => r.html).join("\n");
+      metadata.mnovaReportCount = reports.length;
+      metadata.mnovaReportFrames = JSON.stringify(
+        reports.map(({ offset, canvas }) => ({ offset, canvas })),
+      );
+    }
+    const stackDisplay = decodeNativeStackDisplay(
+      b,
+      from,
+      records[0].start,
+      members.length,
+    );
+    if (stackDisplay) {
+      for (let j = 0; j < members.length; j++) {
+        members[j].visible = !stackDisplay.hidden.includes(j);
+        members[j].metadata.mnovaDisplayOrder = stackDisplay.order.indexOf(j);
+      }
     }
     if (members.length > 1) {
       const stack = {
         id: uid(),
         label: `Mnova stack ${stacks.length + 1}`,
-        spectrumIds: members.map((s) => s.id),
-        referenceId: members[0].id,
+        spectrumIds: (stackDisplay?.order ?? members.map((_, i) => i)).map(
+          (i) => members[i].id,
+        ),
+        referenceId: members[stackDisplay?.selected ?? 0].id,
       };
       stacks.push(stack);
       members.forEach((s) => (s.metadata.mnovaStackId = stack.id));
@@ -524,11 +665,10 @@ export async function importMnovaNative(
   }
   if (!spectra.length)
     throw Error("No supported native Mnova 1D spectra were found.");
-  warnings.push(
-    "Native Mnova import preserves processed 1D spectra and real-only processed 2D planes, calibration, comments and dataset membership. Stack display order, gains, raw FID reprocessing, analysis annotations and page artwork are not restored yet.",
-  );
+
   return {
     spectra,
+    view: spectra[0]?.savedView,
     stacks,
     warnings,
     projectName: label.replace(/\.mnova$/i, ""),

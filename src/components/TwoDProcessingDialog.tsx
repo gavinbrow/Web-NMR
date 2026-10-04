@@ -169,6 +169,24 @@ export function TwoDProcessingDialog(p: Props) {
             F1 · {p.spectrum.twoD!.nucleusF1}
           </button>
         </div>
+        {p.spectrum.nativeSource2D && (
+          <label className="field">
+            <span>Processing source</span>
+            <select
+              aria-label="2D processing source"
+              value={p.recipe.source ?? "processed"}
+              onChange={(e) =>
+                p.onRecipe({
+                  ...p.recipe,
+                  source: e.target.value as TwoDProcessingRecipe["source"],
+                })
+              }
+            >
+              <option value="processed">Saved corrected spectrum</option>
+              <option value="mnova-source">Saved Mnova source spectrum</option>
+            </select>
+          </label>
+        )}
         {p.spectrum.twoDRaw && (
           <label className="checkbox-field">
             <input

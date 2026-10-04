@@ -6,7 +6,7 @@ The source wrapper is `decode.c`; `build.sh` downloads the pinned upstream sourc
 
 ```sh
 bash scripts/mnova-codec/build.sh
-npm test -- src/core/mnovaNativeFixtures.test.ts src/core/mnovaNative.test.ts
+npm test -- src/core/mnovaNativeFixtures.test.ts src/core/mnovaNative.test.ts src/core/mnovaNativeAnalysis.test.ts
 npm run build
 ```
 
@@ -20,9 +20,19 @@ Verified against Mnova 17.0.0-41178 saves and the supplied native reference docu
 
 - Modern native Qt compatibility records with version-nine dimensional essentials.
 - Uncompressed declared little/big-endian float32 1D real/complex arrays, and native JPEG 2000 compressed 1D arrays.
-- Real-only processed 2D matrices, with distinct F2 and F1 calibration.
+- Processed 2D real, complex and hypercomplex matrices, with distinct F2/F1 calibration. Uncompressed row-paired/interleaved components and independently framed compressed RR/RI/IR/II channels map to `real`, `imagF2`, `imagF1`, `imagBoth`; native signs are retained.
 - Saved processed intensities, phase/baseline already reflected in them, nucleus, frequency, calibrated descending ppm axes, complete parameter Title/Comment, and multi-spectrum dataset membership.
+- Available native complex 1D FIDs, including dwell, carrier, width and exact group delay. Separate native 2D spectral sources are retained for explicitly selected reprocessing; source quadrature is never mixed with already corrected output.
+- Saved bounded ppm and intensity axes, Qt RGB color, canvas geometry, stack order, hidden members and selected member. The saved intensity range is a viewport, not a guessed scalar gain.
+- Saved Text Report content and geometry. Original QTextDocument HTML is retained as inert metadata; plain text is extracted without rendering scripts or imported markup.
+- Saved 1D integrals with exact native boundaries, signed saved areas and normalization, separate from Web NMR’s recomputed ppm areas; saved line peaks with heights/custom labels; saved multiplet regions, centers, names, categories, J constants, normalization and nuclide counts.
 
-Stack display order, gain, hidden rows, annotations, raw source replay and publication artwork are not restored. Complex/hypercomplex native 2D, higher dimensions, legacy serialization versions, and other compression dialects fail explicitly. Reader support does not imply native Mnova writing.
+Freeform page composition and proprietary processing algorithms are not reproduced. Individual stack gain/delta fields have not been independently verified; global intensity bounds are restored without inventing those values. Higher dimensions, legacy serialization versions and other compression dialects fail explicitly. Native 2D time-domain acquisition quadrature settings are not decoded, so those raw sources cannot be replayed by this dialect. Files saved real-only contain no measured imaginary planes; the affected 2D spectrum receives a specific explanation and keeps its exact RR values. Unsupported saved annotation extensions receive a per-spectrum, per-analysis warning while supported samples, FIDs and other annotations remain available. Reader support does not imply native Mnova writing.
 
-The optional local-reference tests read user files only when available outside the application source. They never upload or package those documents. Self-contained authored fixtures cover interleaving, both byte orders, exact compressed reconstruction, independent non-square F1/F2 calibration, JPEG shape checks, metadata, array framing, truncation, corruption and expansion limits.
+The optional local-reference tests read user files only when available outside the application source. They never upload or package those documents. Self-contained authored fixtures cover interleaving, both byte orders, exact compressed reconstruction, independent non-square F1/F2 calibration, JPEG shape checks, metadata, array framing, truncation, corruption and expansion limits. Four-quadrant tests cover independently phased F1/F2 on non-square matrices and compressed channel framing. The actual controlled complex save discarded imaginary planes under its real-only save setting, so the hypercomplex decoder is verified against inspected native accessor/storage order and authored framed records, not a claim that absent native planes were recovered.
+
+## Native analysis records
+
+`src/core/mnovaNativeAnalysis.ts` reads the explicitly framed current analysis collections. The terminal integral block precedes each processed array. Peak reading skips the two complete processing-status records and reads the next current peak-list block. Multiplet reading excludes those previous processing-status snapshots for subsequent stacked members, so deleted or historical annotations cannot become current data. Native areas and normalization are stored independently from Web NMR’s signed trapezoid areas.
+
+All 190 integrals in the external 38-spectrum document match Mnova’s script API limits, saved areas and normalized values exactly. That document has no saved peak or multiplet lists. Separate authored native controls exercise two labeled peaks, two named singlets, manual dd/q couplings, signed normalization and count preservation. Tests also cover malformed counts/frames and historical-snapshot exclusion. No analysis is inferred from page report text or rerun automatically. Combined disjoint integral regions preserve their saved value and their editable outer envelope; this detected case receives a specific warning. Native 2D analysis annotations and historical multiplet extensions containing deprecated internal peak objects are outside this decoder’s current analysis dialect.
