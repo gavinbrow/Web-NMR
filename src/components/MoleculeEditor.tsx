@@ -2,49 +2,62 @@ import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent, PointerEvent, ReactNode } from "react";
 import {
   ArrowDownToLine,
-  ArrowUpFromLine,
   Check,
   ChevronDown,
   Copy,
   Eraser,
+  Expand,
   Hand,
-  Hexagon,
-  Minus,
+  Maximize2,
   MousePointer2,
-  Plus,
   Redo2,
-  RotateCcw,
+  RotateCw,
+  Shrink,
   Sparkles,
   Trash2,
   Undo2,
   X,
   ZoomIn,
   ZoomOut,
+  HelpCircle,
+  ClipboardPaste,
+  Scissors,
+  FolderOpen,
 } from "lucide-react";
 import {
   addMoleculeAtom,
   addMoleculeBond,
-  addMoleculeRing,
   cleanMolecule,
   emptyMolecule,
   exportMoleculeMolfile,
   exportMoleculeSmiles,
   importMolecule,
-  moleculeBondLength,
   moleculeBounds,
   moleculeChanged,
   moleculeElements,
   moleculeValenceWarnings,
   removeMoleculeAtoms,
   validateMolecule,
+  type MoleculeDocument,
+  type MoleculeBond,
 } from "../features/molecule";
-import type { MoleculeDocument, MoleculeBond } from "../features/molecule";
+import {
+  bondEndpoint,
+  drawingHit,
+  drawBond,
+  drawChain,
+  drawingFragment,
+  mergeDrawing,
+  moveDrawingAtoms,
+  placeDrawingRing,
+  type DrawingPoint,
+  type DrawingHit,
+} from "../features/moleculeDrawing";
 import { MoleculeGlyphs } from "./MoleculeView";
 import "./MoleculeEditor.css";
-
 export interface MoleculeEditorProps {
   value: MoleculeDocument | null;
-  onChange: (document: MoleculeDocument | null) => void;
+  onChange: (doc: MoleculeDocument | null) => void;
   selectedAtomIds?: string[];
   onSelectAtoms?: (ids: string[]) => void;
   compact?: boolean;
@@ -55,73 +68,137 @@ type Tool =
   | "erase"
   | "element"
   | "bond"
+  | "chain"
   | "ring"
   | "charge-plus"
   | "charge-minus";
-type Point = { x: number; y: number };
 type Gesture = {
-  kind: "bond" | "move" | "pan" | "box";
-  start: Point;
-  current: Point;
-  atomId?: string;
-  ids?: string[];
+  kind: "draw" | "move" | "pan" | "box";
+  start: DrawingPoint;
+  current: DrawingPoint;
+  client: DrawingPoint;
   original: MoleculeDocument;
-  pan: Point;
+  pan: DrawingPoint;
+  hit: DrawingHit;
+  ids: string[];
+  tool: Tool;
 };
-const bondModes: {
-  label: string;
-  symbol: string;
-  properties: Partial<MoleculeBond>;
-}[] = [
+const bondModes: { label: string; properties: Partial<MoleculeBond> }[] = [
   {
-    label: "Single bond",
-    symbol: "—",
+    label: "Single bond (1)",
     properties: { order: 1, aromatic: false, stereo: "none" },
   },
   {
-    label: "Double bond",
-    symbol: "═",
+    label: "Double bond (2)",
     properties: { order: 2, aromatic: false, stereo: "none" },
   },
   {
-    label: "Triple bond",
-    symbol: "≡",
+    label: "Triple bond (3)",
     properties: { order: 3, aromatic: false, stereo: "none" },
   },
   {
     label: "Aromatic bond",
-    symbol: "╌",
     properties: { order: 1, aromatic: true, stereo: "none" },
   },
   {
-    label: "Wedge bond",
-    symbol: "◀",
+    label: "Solid wedge bond",
     properties: { order: 1, aromatic: false, stereo: "wedge" },
   },
   {
     label: "Dashed wedge bond",
-    symbol: "⋰",
     properties: { order: 1, aromatic: false, stereo: "dash" },
   },
 ];
+function BondIcon({ mode = 0 }: { mode?: number }) {
+  return (
+    <svg
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+    >
+      {mode === 4 ? (
+        <path d="M4 20 17 3 21 7Z" fill="currentColor" stroke="none" />
+      ) : mode === 5 ? (
+        Array.from({ length: 6 }, (_, i) => (
+          <path
+            key={i}
+            d={`M${4 + i * 2.3 - i * 0.3} ${20 - i * 2.8 - i * 0.3}l${i * 0.75 + 1} ${i * 0.75 + 1}`}
+          />
+        ))
+      ) : (
+        <>
+          {mode !== 2 && mode !== 3 ? <path d="M5 19 19 5" /> : null}
+          {mode === 1 || mode === 2 ? <path d="M3 16 16 3" /> : null}
+          {mode === 2 ? (
+            <>
+              <path d="M6 19 19 6" />
+              <path d="M9 22 22 9" />
+            </>
+          ) : null}
+          {mode === 3 ? (
+            <>
+              <path d="M4 18 18 4" />
+              <path d="M8 21 21 8" strokeDasharray="3 3" />
+            </>
+          ) : null}
+        </>
+      )}
+    </svg>
+  );
+}
+function RingIcon({
+  size = 6,
+  aromatic = false,
+}: {
+  size?: number;
+  aromatic?: boolean;
+}) {
+  return (
+    <svg
+      width="25"
+      height="25"
+      viewBox="0 0 28 28"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      aria-hidden="true"
+    >
+      <polygon
+        points={Array.from(
+          { length: size },
+          (_, i) =>
+            `${14 + 10 * Math.cos(-Math.PI / 2 + (i * 2 * Math.PI) / size)},${14 + 10 * Math.sin(-Math.PI / 2 + (i * 2 * Math.PI) / size)}`,
+        ).join(" ")}
+      />
+      {aromatic && <circle cx="14" cy="14" r="5" />}
+    </svg>
+  );
+}
 function ToolButton({
   label,
   active,
   children,
   onClick,
   disabled,
+  className = "",
 }: {
   label: string;
   active?: boolean;
   children: ReactNode;
   onClick: () => void;
   disabled?: boolean;
+  className?: string;
 }) {
   return (
     <button
       type="button"
-      className={`molecule-tool ${active ? "active" : ""}`}
-      title={label}
+      className={`molecule-tool ${active ? "active" : ""} ${className}`}
+      data-tooltip={label}
       aria-label={label}
       aria-pressed={active}
       onClick={onClick}
@@ -138,70 +215,160 @@ export function MoleculeEditor({
   onSelectAtoms,
   compact = false,
 }: MoleculeEditorProps) {
-  const empty = useRef(emptyMolecule());
-  const document = value ?? empty.current;
-  const [tool, setTool] = useState<Tool>("bond");
-  const [element, setElement] = useState("C");
-  const [bondMode, setBondMode] = useState(0);
-  const [ringSize, setRingSize] = useState(6);
-  const [aromaticRing, setAromaticRing] = useState(true);
-  const [internalSelection, setInternalSelection] = useState<string[]>([]);
-  const selected = selectedAtomIds ?? internalSelection;
-  const [selectedBond, setSelectedBond] = useState<string | null>(null);
-  const [undo, setUndo] = useState<MoleculeDocument[]>([]);
-  const [redo, setRedo] = useState<MoleculeDocument[]>([]);
-  const [preview, setPreview] = useState<MoleculeDocument | null>(null);
-  const [gesture, setGesture] = useState<Gesture | null>(null);
-  const gestureRef = useRef<Gesture | null>(null);
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
-  const [showNumbers, setShowNumbers] = useState(true);
-  const [spaceDown, setSpaceDown] = useState(false);
-  const [dialog, setDialog] = useState<"import" | "export" | null>(null);
-  const [format, setFormat] = useState<"smiles" | "molfile">("smiles");
-  const [text, setText] = useState("");
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const svg = useRef<SVGSVGElement>(null);
-  const fileInput = useRef<HTMLInputElement>(null);
+  const empty = useRef(emptyMolecule()),
+    doc = value ?? empty.current;
+  const [tool, setTool] = useState<Tool>("bond"),
+    [element, setElement] = useState("C"),
+    [bondMode, setBondMode] = useState(0),
+    [ringSize, setRingSize] = useState(6),
+    [aromaticRing, setAromaticRing] = useState(true);
+  const [selection, setSelection] = useState<string[]>([]),
+    [selectedBond, setSelectedBond] = useState<string | null>(null);
+  const selected = selectedAtomIds ?? selection;
+  const [undo, setUndo] = useState<MoleculeDocument[]>([]),
+    [redo, setRedo] = useState<MoleculeDocument[]>([]);
+  const [preview, setPreview] = useState<MoleculeDocument | null>(null),
+    previewRef = useRef<MoleculeDocument | null>(null);
+  const [gesture, setGesture] = useState<Gesture | null>(null),
+    gestureRef = useRef<Gesture | null>(null);
+  const [hover, setHover] = useState<DrawingPoint | null>(null),
+    [hoverHit, setHoverHit] = useState<DrawingHit>({});
+  const [view, setView] = useState({ zoom: 1, pan: { x: 0, y: 0 } }),
+    viewRef = useRef(view);
+  viewRef.current = view;
+  const [size, setSize] = useState({ width: 800, height: 500 }),
+    [space, setSpace] = useState(false),
+    [numbers, setNumbers] = useState(false),
+    [expanded, setExpanded] = useState(false);
+  const [palette, setPalette] = useState<"bonds" | "elements" | null>(null),
+    [dialog, setDialog] = useState<
+      "import" | "export" | "help" | "atom" | null
+    >(null);
+  const [format, setFormat] = useState<"smiles" | "molfile">("smiles"),
+    [text, setText] = useState(""),
+    [quick, setQuick] = useState(""),
+    [error, setError] = useState(""),
+    [notice, setNotice] = useState("");
+  const [atomEdit, setAtomEdit] = useState({
+    id: "",
+    element: "C",
+    charge: 0,
+    isotope: "",
+  });
+  const svg = useRef<SVGSVGElement>(null),
+    root = useRef<HTMLDivElement>(null),
+    fileInput = useRef<HTMLInputElement>(null),
+    lastDoc = useRef(doc.id),
+    clipboard = useRef<MoleculeDocument | null>(null);
+  const select = (ids: string[]) => {
+    setSelection(ids);
+    onSelectAtoms?.(ids);
+  };
+  const fit = (molecule = doc) => {
+    const b = moleculeBounds(molecule, 28);
+    setView({
+      pan: { x: b.x + b.width / 2, y: b.y + b.height / 2 },
+      zoom: Math.min(
+        1.25,
+        Math.max(0.15, (size.width - 180) / b.width),
+        Math.max(0.15, (size.height - 75) / b.height),
+      ),
+    });
+  };
   useEffect(() => {
     const canvas = svg.current;
     if (!canvas) return;
-    const wheel = (event: WheelEvent) => {
-      event.preventDefault();
-      event.stopPropagation();
-      setZoom((current) =>
-        Math.min(4, Math.max(0.2, current * (event.deltaY < 0 ? 1.12 : 0.89))),
-      );
+    const observer = new ResizeObserver(() => {
+      const r = canvas.getBoundingClientRect();
+      setSize({ width: Math.max(1, r.width), height: Math.max(1, r.height) });
+    });
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    if (lastDoc.current !== doc.id) {
+      lastDoc.current = doc.id;
+      setUndo([]);
+      setRedo([]);
+      select([]);
+      setSelectedBond(null);
+      fit(doc);
+    }
+  }, [doc.id]);
+  useEffect(() => {
+    const canvas = svg.current;
+    if (!canvas) return;
+    const wheel = (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const r = canvas.getBoundingClientRect(),
+        v = viewRef.current;
+      if (e.ctrlKey || e.metaKey || !e.shiftKey) {
+        const z = Math.max(
+            0.15,
+            Math.min(4, v.zoom * Math.exp(-e.deltaY * 0.0018)),
+          ),
+          dx = e.clientX - r.left - r.width / 2,
+          dy = e.clientY - r.top - r.height / 2;
+        setView({
+          zoom: z,
+          pan: {
+            x: v.pan.x + dx / v.zoom - dx / z,
+            y: v.pan.y + dy / v.zoom - dy / z,
+          },
+        });
+      } else {
+        setView({
+          ...v,
+          pan: {
+            x: v.pan.x + e.deltaY / v.zoom,
+            y: v.pan.y + e.deltaX / v.zoom,
+          },
+        });
+      }
     };
     canvas.addEventListener("wheel", wheel, { passive: false });
     return () => canvas.removeEventListener("wheel", wheel);
   }, []);
-  const display = preview ?? document;
-  const warnings = moleculeValenceWarnings(display);
-  const select = (ids: string[]) => {
-    setInternalSelection(ids);
-    onSelectAtoms?.(ids);
-  };
+  useEffect(() => {
+    if (!palette) return;
+    const close = (e: globalThis.PointerEvent) => {
+      if (!(e.target as Element).closest(".molecule-palette-anchor"))
+        setPalette(null);
+    };
+    window.addEventListener("pointerdown", close);
+    return () => window.removeEventListener("pointerdown", close);
+  }, [palette]);
+  useEffect(() => {
+    if (!dialog) return;
+    const panel = root.current?.querySelector<HTMLElement>(".molecule-dialog");
+    const focusable = panel?.querySelector<HTMLElement>(
+      "textarea, select, button",
+    );
+    focusable?.focus();
+    return () => svg.current?.focus();
+  }, [dialog]);
   const commit = (next: MoleculeDocument) => {
-    if (next === document) return;
-    const issues = validateMolecule(next);
-    if (issues.length) {
-      setError(issues[0]);
+    if (next === doc) return;
+    const errors = validateMolecule(next);
+    if (errors.length) {
+      setError(errors[0]);
       return;
     }
-    setUndo((history) => [...history.slice(-79), document]);
+    setUndo((h) => [...h.slice(-99), doc]);
     setRedo([]);
     setError("");
     setNotice("");
+    lastDoc.current = next.id;
     onChange(next);
   };
   const undoChange = () => {
-    const previous = undo.at(-1);
-    if (!previous) return;
+    const prev = undo.at(-1);
+    if (!prev) return;
     setUndo(undo.slice(0, -1));
-    setRedo([...redo, document]);
-    onChange(previous);
+    setRedo([...redo, doc]);
+    lastDoc.current = prev.id;
+    onChange(prev);
     select([]);
     setSelectedBond(null);
   };
@@ -209,87 +376,125 @@ export function MoleculeEditor({
     const next = redo.at(-1);
     if (!next) return;
     setRedo(redo.slice(0, -1));
-    setUndo([...undo, document]);
+    setUndo([...undo, doc]);
+    lastDoc.current = next.id;
     onChange(next);
     select([]);
     setSelectedBond(null);
   };
-  const fit = (molecule = document) => {
-    const bounds = moleculeBounds(molecule, 60);
-    setPan({ x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 });
-    setZoom(
-      Math.max(0.2, Math.min(2, 740 / bounds.width, 430 / bounds.height)),
-    );
+  const setPreviewDoc = (next: MoleculeDocument | null) => {
+    previewRef.current = next;
+    setPreview(next);
   };
-  const point = (event: PointerEvent<SVGSVGElement>): Point => {
-    const matrix = svg.current?.getScreenCTM();
-    if (!matrix) return { x: 0, y: 0 };
-    const p = new DOMPoint(event.clientX, event.clientY).matrixTransform(
-      matrix.inverse(),
-    );
-    return { x: p.x, y: p.y };
+  const point = (e: { clientX: number; clientY: number }): DrawingPoint => {
+    const r = svg.current!.getBoundingClientRect(),
+      v = viewRef.current;
+    return {
+      x: v.pan.x + (e.clientX - r.left - r.width / 2) / v.zoom,
+      y: v.pan.y + (e.clientY - r.top - r.height / 2) / v.zoom,
+    };
   };
-  const nearAtom = (p: Point, exclude?: string) =>
-    document.atoms
-      .filter((a) => a.id !== exclude)
-      .map((a) => ({ atom: a, distance: Math.hypot(a.x - p.x, a.y - p.y) }))
-      .sort((a, b) => a.distance - b.distance)
-      .find((a) => a.distance < 15 / Math.max(zoom, 0.6))?.atom;
-  const nearBond = (p: Point) =>
-    document.bonds.find((bond) => {
-      const a = document.atoms.find((a) => a.id === bond.from),
-        b = document.atoms.find((a) => a.id === bond.to);
-      if (!a || !b) return false;
-      const dx = b.x - a.x,
-        dy = b.y - a.y;
-      const t = Math.max(
-        0,
-        Math.min(
-          1,
-          ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1),
-        ),
-      );
-      return (
-        Math.hypot(p.x - a.x - dx * t, p.y - a.y - dy * t) <
-        7 / Math.max(zoom, 0.6)
-      );
+  const hit = (p: DrawingPoint) => drawingHit(doc, p, 12 / view.zoom);
+  const clearGesture = () => {
+    gestureRef.current = null;
+    setGesture(null);
+    setPreviewDoc(null);
+  };
+  const activate = (next: Tool) => {
+    clearGesture();
+    setTool(next);
+    setPalette(null);
+    setError("");
+    svg.current?.focus();
+  };
+  const openAtom = (id: string) => {
+    const a = doc.atoms.find((a) => a.id === id);
+    if (!a) return;
+    setAtomEdit({
+      id: a.id,
+      element: a.element,
+      charge: a.charge,
+      isotope: a.isotope ? String(a.isotope) : "",
     });
-  const startGesture = (next: Gesture) => {
-    gestureRef.current = next;
-    setGesture(next);
+    setError("");
+    setDialog("atom");
   };
-  const pointerDown = (event: PointerEvent<SVGSVGElement>) => {
-    if (event.button !== 0 && event.button !== 1) return;
-    event.preventDefault();
-    event.currentTarget.focus();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    const p = point(event),
-      atom = nearAtom(p),
-      bond = !atom ? nearBond(p) : undefined;
-    const base = { start: p, current: p, original: document, pan };
-    if (tool === "pan" || spaceDown || event.button === 1) {
-      startGesture({ ...base, kind: "pan" });
-      return;
-    }
-    if (tool === "erase") {
-      if (atom) {
-        commit(removeMoleculeAtoms(document, [atom.id]));
-        select(selected.filter((id) => id !== atom.id));
-      } else if (bond)
+  const editElement = (ids: string[], symbol: string) => {
+    commit(
+      moleculeChanged({
+        ...doc,
+        atoms: doc.atoms.map((a) =>
+          ids.includes(a.id) ? { ...a, element: symbol } : a,
+        ),
+      }),
+    );
+  };
+  const remove = () => {
+    if (selectedBond) {
+      commit(
+        moleculeChanged({
+          ...doc,
+          bonds: doc.bonds.filter((b) => b.id !== selectedBond),
+        }),
+      );
+    } else if (selected.length) commit(removeMoleculeAtoms(doc, selected));
+    select([]);
+    setSelectedBond(null);
+  };
+  const charge = (amount: number) => {
+    if (selected.length)
+      commit(
+        moleculeChanged({
+          ...doc,
+          atoms: doc.atoms.map((a) =>
+            selected.includes(a.id)
+              ? { ...a, charge: Math.max(-8, Math.min(8, a.charge + amount)) }
+              : a,
+          ),
+        }),
+      );
+    else activate(amount > 0 ? "charge-plus" : "charge-minus");
+  };
+  const drawPreview = (g: Gesture, p: DrawingPoint, free = false) => {
+    if (g.tool === "chain")
+      return drawChain(g.original, g.start, p, g.hit.atomId);
+    const end = bondEndpoint(g.original, g.start, p, g.hit.atomId, free);
+    return drawBond(
+      g.original,
+      g.start,
+      end,
+      g.hit.atomId,
+      g.tool === "element" ? element : "C",
+      g.tool === "element" ? {} : bondModes[bondMode].properties,
+    );
+  };
+  const pointerDown = (e: PointerEvent<SVGSVGElement>) => {
+    if (e.button !== 0 && e.button !== 1) return;
+    e.preventDefault();
+    e.currentTarget.focus();
+    setPalette(null);
+    const p = point(e),
+      h = hit(p),
+      atom = doc.atoms.find((a) => a.id === h.atomId),
+      bond = doc.bonds.find((b) => b.id === h.bondId);
+    if (tool === "erase" && !space) {
+      if (atom) commit(removeMoleculeAtoms(doc, [atom.id]));
+      else if (bond)
         commit(
           moleculeChanged({
-            ...document,
-            bonds: document.bonds.filter((b) => b.id !== bond.id),
+            ...doc,
+            bonds: doc.bonds.filter((b) => b.id !== bond.id),
           }),
         );
+      select([]);
       return;
     }
-    if (tool === "charge-plus" || tool === "charge-minus") {
+    if ((tool === "charge-plus" || tool === "charge-minus") && !space) {
       if (atom)
         commit(
           moleculeChanged({
-            ...document,
-            atoms: document.atoms.map((a) =>
+            ...doc,
+            atoms: doc.atoms.map((a) =>
               a.id === atom.id
                 ? {
                     ...a,
@@ -304,653 +509,887 @@ export function MoleculeEditor({
         );
       return;
     }
-    if (tool === "ring") {
+    if (tool === "ring" && !space) {
+      commit(placeDrawingRing(doc, p, ringSize, aromaticRing, h));
+      return;
+    }
+    if (tool === "bond" && bond && !space) {
+      const props = bondModes[bondMode].properties;
       commit(
-        addMoleculeRing(document, p.x, p.y, ringSize, aromaticRing, atom?.id),
+        addMoleculeBond(
+          doc,
+          bond.from,
+          bond.to,
+          bondMode === 0 && bond.stereo === "none" && !bond.aromatic
+            ? {
+                ...props,
+                order: bond.order === 1 ? 2 : bond.order === 2 ? 3 : 1,
+              }
+            : props,
+        ),
       );
       return;
     }
-    if (tool === "element") {
-      if (atom)
-        commit(
-          moleculeChanged({
-            ...document,
-            atoms: document.atoms.map((a) =>
-              a.id === atom.id ? { ...a, element } : a,
-            ),
-          }),
-        );
-      else if (bond) {
-        const added = addMoleculeAtom(document, element, p.x, p.y);
-        let next = moleculeChanged({
-          ...added.document,
-          bonds: added.document.bonds.filter((b) => b.id !== bond.id),
-        });
-        next = addMoleculeBond(next, bond.from, added.atom.id);
-        commit(addMoleculeBond(next, added.atom.id, bond.to));
-      } else commit(addMoleculeAtom(document, element, p.x, p.y).document);
-      return;
-    }
-    if (tool === "bond") {
-      if (bond) {
-        commit(
-          addMoleculeBond(
-            document,
-            bond.from,
-            bond.to,
-            bondModes[bondMode].properties,
-          ),
-        );
-        return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    let g: Gesture = {
+      kind: "draw",
+      tool,
+      start: atom ? { x: atom.x, y: atom.y } : p,
+      current: p,
+      client: { x: e.clientX, y: e.clientY },
+      original: doc,
+      pan: view.pan,
+      hit: h,
+      ids: [],
+    };
+    if (space || tool === "pan" || e.button === 1) g = { ...g, kind: "pan" };
+    else if (tool === "select") {
+      if (atom || bond) {
+        const ids = atom ? [atom.id] : [bond!.from, bond!.to];
+        const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+        const next = additive
+          ? Array.from(new Set([...selected, ...ids]))
+          : ids.every((id) => selected.includes(id))
+            ? selected
+            : ids;
+        select(next);
+        setSelectedBond(bond?.id ?? null);
+        g = { ...g, kind: "move", ids: next };
+      } else {
+        if (!e.shiftKey) select([]);
+        setSelectedBond(null);
+        g = { ...g, kind: "box", ids: e.shiftKey ? selected : [] };
       }
-      startGesture({
-        ...base,
-        kind: "bond",
-        atomId: atom?.id,
-        start: atom ? { x: atom.x, y: atom.y } : p,
-      });
-      return;
     }
-    if (atom || bond) {
-      const ids = atom ? [atom.id] : [bond!.from, bond!.to];
-      const additive = event.shiftKey || event.metaKey || event.ctrlKey;
-      const nextIds = additive
-        ? [...new Set([...selected, ...ids])]
-        : ids.every((id) => selected.includes(id))
-          ? selected
-          : ids;
-      select(nextIds);
-      setSelectedBond(bond?.id ?? null);
-      startGesture({ ...base, kind: "move", ids: nextIds });
-    } else {
-      if (!event.shiftKey) select([]);
-      setSelectedBond(null);
-      startGesture({
-        ...base,
-        kind: "box",
-        ids: event.shiftKey ? selected : [],
-      });
-    }
+    gestureRef.current = g;
+    setGesture(g);
+    if (g.kind === "draw" && tool !== "element")
+      setPreviewDoc(drawPreview(g, p, e.altKey));
   };
-  const pointerMove = (event: PointerEvent<SVGSVGElement>) => {
-    const active = gestureRef.current;
-    if (!active) return;
-    const p = point(event),
-      next = { ...active, current: p };
-    if (active.kind === "pan") {
-      // Screen displacement stays stable while the viewBox changes during panning.
-      const rect = event.currentTarget.getBoundingClientRect();
-      const scale = Math.min(
-        rect.width / (800 / zoom),
-        rect.height / (520 / zoom),
-      );
-      const movement = {
-        x: event.movementX / (scale || 1),
-        y: event.movementY / (scale || 1),
-      };
-      setPan((previous) => ({
-        x: previous.x - movement.x,
-        y: previous.y - movement.y,
+  const pointerMove = (e: PointerEvent<SVGSVGElement>) => {
+    const p = point(e),
+      g = gestureRef.current;
+    setHover(p);
+    setHoverHit(hit(p));
+    if (!g) return;
+    const next = { ...g, current: p };
+    if (g.kind === "pan")
+      setView((v) => ({
+        ...v,
+        pan: {
+          x: g.pan.x - (e.clientX - g.client.x) / v.zoom,
+          y: g.pan.y - (e.clientY - g.client.y) / v.zoom,
+        },
       }));
-    } else if (active.kind === "move") {
-      const dx = p.x - active.start.x,
-        dy = p.y - active.start.y;
-      setPreview(
-        moleculeChanged({
-          ...active.original,
-          atoms: active.original.atoms.map((a) =>
-            active.ids?.includes(a.id) ? { ...a, x: a.x + dx, y: a.y + dy } : a,
-          ),
+    if (g.kind === "move")
+      setPreviewDoc(
+        moveDrawingAtoms(g.original, g.ids, {
+          x: p.x - g.start.x,
+          y: p.y - g.start.y,
         }),
       );
-    }
+    if (g.kind === "draw") setPreviewDoc(drawPreview(g, p, e.altKey));
     gestureRef.current = next;
     setGesture(next);
   };
-  const pointerUp = (event: PointerEvent<SVGSVGElement>) => {
-    const active = gestureRef.current;
-    if (!active) return;
-    const p = point(event);
-    if (
-      active.kind === "move" &&
-      preview &&
-      Math.hypot(p.x - active.start.x, p.y - active.start.y) > 0.5
-    )
-      commit(preview);
-    if (active.kind === "box") {
-      const x1 = Math.min(active.start.x, p.x),
-        x2 = Math.max(active.start.x, p.x),
-        y1 = Math.min(active.start.y, p.y),
-        y2 = Math.max(active.start.y, p.y);
-      select([
-        ...new Set([
-          ...(active.ids ?? []),
-          ...document.atoms
-            .filter((a) => a.x >= x1 && a.x <= x2 && a.y >= y1 && a.y <= y2)
-            .map((a) => a.id),
-        ]),
-      ]);
-    }
-    if (active.kind === "bond") {
-      let next = document,
-        from = active.atomId;
-      if (!from) {
-        const added = addMoleculeAtom(
-          next,
-          "C",
-          active.start.x,
-          active.start.y,
-        );
-        next = added.document;
-        from = added.atom.id;
-      }
-      let target = nearAtom(p, from);
-      if (!target) {
-        const distance = Math.hypot(p.x - active.start.x, p.y - active.start.y);
-        let angle =
-          distance > 12
-            ? Math.atan2(p.y - active.start.y, p.x - active.start.x)
-            : -Math.PI / 6;
-        if (distance <= 12 && active.atomId) {
-          const attached = document.bonds.find(
-            (b) => b.from === from || b.to === from,
-          );
-          const neighbor = document.atoms.find(
-            (a) =>
-              a.id === (attached?.from === from ? attached.to : attached?.from),
-          );
-          if (neighbor)
-            angle =
-              Math.atan2(
-                active.start.y - neighbor.y,
-                active.start.x - neighbor.x,
-              ) +
-              Math.PI / 3;
-        }
-        if (!event.altKey)
-          angle = (Math.round(angle / (Math.PI / 6)) * Math.PI) / 6;
-        const length =
-          distance > 12 && event.altKey ? distance : moleculeBondLength;
-        const endpoint = {
-          x: active.start.x + Math.cos(angle) * length,
-          y: active.start.y + Math.sin(angle) * length,
-        };
-        target = nearAtom(endpoint, from);
-        if (!target) {
-          const added = addMoleculeAtom(next, "C", endpoint.x, endpoint.y);
-          next = added.document;
-          target = added.atom;
-        }
-      }
+  const pointerUp = (e: PointerEvent<SVGSVGElement>) => {
+    const g = gestureRef.current;
+    if (!g) return;
+    const p = point(e),
+      distance = Math.hypot(e.clientX - g.client.x, e.clientY - g.client.y);
+    if (g.kind === "draw") {
+      if (g.tool === "element" && distance < 5) {
+        if (g.hit.atomId) editElement([g.hit.atomId], element);
+        else if (g.hit.bondId) {
+          const b = doc.bonds.find((b) => b.id === g.hit.bondId)!;
+          const a = addMoleculeAtom(doc, element, p.x, p.y);
+          let n = moleculeChanged({
+            ...a.document,
+            bonds: a.document.bonds.filter((bond) => bond.id !== b.id),
+          });
+          n = addMoleculeBond(n, b.from, a.atom.id);
+          commit(addMoleculeBond(n, a.atom.id, b.to));
+        } else commit(addMoleculeAtom(doc, element, p.x, p.y).document);
+      } else commit(drawPreview(g, p, e.altKey));
+    } else if (g.kind === "move" && distance > 3)
       commit(
-        addMoleculeBond(next, from, target.id, bondModes[bondMode].properties),
-      );
-    }
-    gestureRef.current = null;
-    setGesture(null);
-    setPreview(null);
-  };
-  const deleteSelection = () => {
-    if (selectedBond) {
-      commit(
-        moleculeChanged({
-          ...document,
-          bonds: document.bonds.filter((b) => b.id !== selectedBond),
+        moveDrawingAtoms(g.original, g.ids, {
+          x: p.x - g.start.x,
+          y: p.y - g.start.y,
         }),
       );
-      select([]);
-    } else if (selected.length) {
-      commit(removeMoleculeAtoms(document, selected));
-      select([]);
-    }
-    setSelectedBond(null);
-  };
-  const adjustCharge = (amount: number) => {
-    if (selected.length)
-      commit(
-        moleculeChanged({
-          ...document,
-          atoms: document.atoms.map((a) =>
-            selected.includes(a.id)
-              ? { ...a, charge: Math.max(-8, Math.min(8, a.charge + amount)) }
-              : a,
-          ),
-        }),
+    else if (g.kind === "box") {
+      const x1 = Math.min(g.start.x, p.x),
+        x2 = Math.max(g.start.x, p.x),
+        y1 = Math.min(g.start.y, p.y),
+        y2 = Math.max(g.start.y, p.y);
+      select(
+        Array.from(
+          new Set([
+            ...g.ids,
+            ...doc.atoms
+              .filter((a) => a.x >= x1 && a.x <= x2 && a.y >= y1 && a.y <= y2)
+              .map((a) => a.id),
+          ]),
+        ),
       );
-    else setTool(amount > 0 ? "charge-plus" : "charge-minus");
+    }
+    if (e.currentTarget.hasPointerCapture(e.pointerId))
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    clearGesture();
   };
-  const keyboard = (event: KeyboardEvent<HTMLDivElement>) => {
-    if ((event.target as HTMLElement).matches("input, textarea, select"))
+  const copy = async (cut = false) => {
+    try {
+      const fragment = selected.length ? drawingFragment(doc, selected) : doc;
+      clipboard.current = fragment;
+      await navigator.clipboard.writeText(exportMoleculeMolfile(fragment));
+      if (cut) remove();
+      else setNotice("Structure copied. Paste adds a new fragment.");
+    } catch {
+      setError("Use Export to copy the structure text.");
+    }
+  };
+  const pasteText = (input: string) => {
+    try {
+      const fragment = importMolecule(
+        input,
+        /V2000|V3000|M  END/.test(input) ? "molfile" : "smiles",
+      );
+      const b = moleculeBounds(fragment, 0);
+      const offset = doc.atoms.length
+        ? {
+            x: view.pan.x - b.x - b.width / 2 + 90,
+            y: view.pan.y - b.y - b.height / 2 + 65,
+          }
+        : { x: view.pan.x, y: view.pan.y };
+      const next = mergeDrawing(doc, fragment, offset);
+      commit(next);
+      select(next.atoms.slice(doc.atoms.length).map((a) => a.id));
+      setTool("select");
+      setNotice("Structure pasted. Drag the selection to position it.");
+    } catch (f) {
+      setError(
+        f instanceof Error ? f.message : "Could not paste this structure.",
+      );
+    }
+  };
+  const paste = async () => {
+    try {
+      pasteText(await navigator.clipboard.readText());
+    } catch {
+      if (clipboard.current) {
+        commit(mergeDrawing(doc, clipboard.current, { x: 90, y: 65 }));
+      } else {
+        setDialog("import");
+        setText("");
+        setError("Paste your structure here.");
+      }
+    }
+  };
+  const keyboard = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (dialog && e.key === "Tab") {
+      const fields = Array.from(
+        root.current?.querySelectorAll<HTMLElement>(
+          ".molecule-dialog button:not(:disabled), .molecule-dialog input, .molecule-dialog select, .molecule-dialog textarea",
+        ) ?? [],
+      );
+      const current = fields.indexOf(
+        window.document.activeElement as HTMLElement,
+      );
+      if (
+        fields.length &&
+        ((e.shiftKey && current <= 0) ||
+          (!e.shiftKey && current === fields.length - 1))
+      ) {
+        e.preventDefault();
+        fields[e.shiftKey ? fields.length - 1 : 0].focus();
+      }
+    }
+    const input = (e.target as HTMLElement).matches("input,textarea,select");
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      setDialog(null);
+      setPalette(null);
+      clearGesture();
+      select([]);
+      setTool("select");
+      setExpanded(false);
       return;
-    if (event.code === "Space") {
-      event.preventDefault();
-      setSpaceDown(true);
     }
-    const command = event.metaKey || event.ctrlKey;
-    if (command && event.key.toLowerCase() === "z") {
-      event.preventDefault();
-      if (event.shiftKey) redoChange();
-      else undoChange();
+    if (input) return;
+    const cmd = e.metaKey || e.ctrlKey,
+      key = e.key.toLowerCase();
+    if (e.code === "Space") {
+      e.preventDefault();
+      setSpace(true);
+      return;
     }
-    if (command && event.key.toLowerCase() === "y") {
-      event.preventDefault();
-      redoChange();
+    if (cmd) {
+      if (["z", "y", "a", "c", "v", "x", "l", "o", "s"].includes(key))
+        e.preventDefault();
+      if (key === "z") e.shiftKey ? redoChange() : undoChange();
+      if (key === "y") redoChange();
+      if (key === "a") {
+        select(doc.atoms.map((a) => a.id));
+        setTool("select");
+        setSelectedBond(null);
+      }
+      if (key === "c") void copy();
+      if (key === "x") void copy(true);
+      if (key === "v") void paste();
+      if (key === "l") clean();
+      if (key === "o") {
+        setDialog("import");
+        setText("");
+        setError("");
+      }
+      if (key === "s") openExport();
+      return;
     }
-    if (command && event.key.toLowerCase() === "a") {
-      event.preventDefault();
-      select(document.atoms.map((a) => a.id));
-      setTool("select");
+    if (e.key === "Delete" || e.key === "Backspace") {
+      e.preventDefault();
+      remove();
+      return;
     }
-    if (event.key === "Delete" || event.key === "Backspace") {
-      event.preventDefault();
-      deleteSelection();
+    if (/^[123]$/.test(e.key)) {
+      setBondMode(Number(e.key) - 1);
+      activate("bond");
+      return;
     }
-    if (event.key === "Escape") {
-      setDialog(null);
-      select([]);
-      setTool("select");
+    if (key === "v") {
+      activate("select");
+      return;
     }
-    if (!command && /^[123]$/.test(event.key)) {
-      setBondMode(Number(event.key) - 1);
-      setTool("bond");
+    if (key === "e") {
+      activate("erase");
+      return;
     }
-    if (
-      !command &&
-      moleculeElements.includes(
-        event.key.toUpperCase() as (typeof moleculeElements)[number],
-      )
-    ) {
-      setElement(event.key.toUpperCase());
-      setTool("element");
+    if (key === "t") {
+      setRingSize(6);
+      setAromaticRing(true);
+      activate("ring");
+      return;
+    }
+    if (key === "+" || key === "=") {
+      charge(1);
+      return;
+    }
+    if (key === "-") {
+      charge(-1);
+      return;
+    }
+    const symbol: keyof typeof shortcutElements =
+      key as keyof typeof shortcutElements;
+    const nextElement = shortcutElements[symbol];
+    if (nextElement) {
+      if (hoverHit.atomId) editElement([hoverHit.atomId], nextElement);
+      else if (selected.length) editElement(selected, nextElement);
+      else {
+        setElement(nextElement);
+        activate("element");
+      }
     }
   };
-  const openExport = (nextFormat: "smiles" | "molfile" = "smiles") => {
-    setError("");
-    setFormat(nextFormat);
+  const clean = () => {
     try {
+      const next = cleanMolecule(doc);
+      commit(next);
+      fit(next);
+    } catch (f) {
+      setError(f instanceof Error ? f.message : "Could not arrange structure.");
+    }
+  };
+  const openExport = (f: "smiles" | "molfile" = format) => {
+    try {
+      setFormat(f);
       setText(
-        nextFormat === "smiles"
-          ? exportMoleculeSmiles(document)
-          : exportMoleculeMolfile(document),
+        f === "smiles" ? exportMoleculeSmiles(doc) : exportMoleculeMolfile(doc),
       );
+      setError("");
       setDialog("export");
-    } catch (failure) {
-      setError(
-        failure instanceof Error
-          ? failure.message
-          : "This structure could not be exported.",
-      );
+    } catch (f) {
+      setError(f instanceof Error ? f.message : "Could not export.");
     }
   };
-  const doImport = () => {
+  const importText = (input = text, f = format) => {
     try {
-      const imported = importMolecule(text, format);
-      commit(imported);
+      const next = importMolecule(input, f);
+      commit(next);
       select([]);
-      fit(imported);
+      setSelectedBond(null);
+      fit(next);
       setDialog(null);
-      setNotice(
-        "Structure imported. Atom numbers start at 1 for the new structure.",
-      );
-    } catch (failure) {
+      setQuick("");
+      setTool("bond");
+      setNotice("Structure imported. Ready to edit.");
+    } catch (f) {
       setError(
-        failure instanceof Error
-          ? failure.message
-          : "Check the structure text and try again.",
+        f instanceof Error ? f.message : "Check your structure and try again.",
       );
     }
   };
-  const download = () => {
-    const blob = new Blob([text], { type: "text/plain" }),
-      url = URL.createObjectURL(blob),
-      anchor = window.document.createElement("a");
-    anchor.href = url;
-    anchor.download = format === "smiles" ? "structure.smi" : "structure.mol";
-    anchor.click();
-    URL.revokeObjectURL(url);
+  const warnings = moleculeValenceWarnings(doc),
+    display = preview ?? doc;
+  let ghost: MoleculeDocument | null = null;
+  if (hover && !gesture && tool === "ring")
+    ghost = placeDrawingRing(doc, hover, ringSize, aromaticRing, hoverHit);
+  const hoverAtom = doc.atoms.find((a) => a.id === hoverHit.atomId),
+    hoverBond = doc.bonds.find((b) => b.id === hoverHit.bondId);
+  const names: Record<Tool, string> = {
+    select: "Select",
+    pan: "Pan",
+    erase: "Erase",
+    element: `${element} atom`,
+    bond: bondModes[bondMode].label.replace(/ \(.*\)/, ""),
+    chain: "Carbon chain",
+    ring: aromaticRing ? "Benzene" : `${ringSize}-membered ring`,
+    "charge-plus": "Positive charge",
+    "charge-minus": "Negative charge",
   };
   return (
     <div
+      ref={root}
+      className={`molecule-editor ${compact ? "compact" : ""} ${expanded ? "is-expanded" : ""} ${size.height < 360 ? "is-shallow" : ""} ${size.height < 460 ? "is-short" : ""}`}
       data-shortcuts="molecule"
-      className={`molecule-editor ${compact ? "compact" : ""}`}
       onKeyDown={keyboard}
-      onKeyUp={(event) => {
-        if (event.code === "Space") setSpaceDown(false);
+      onKeyUp={(e) => {
+        if (e.code === "Space") setSpace(false);
       }}
-      onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget))
-          setSpaceDown(false);
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget)) {
+          setSpace(false);
+          setHoverHit({});
+        }
       }}
     >
-      <div className="molecule-topbar">
-        <div className="molecule-editor-brand">
-          <span className="molecule-brand-mark">
-            <Hexagon size={16} />
-          </span>
-          <strong>Structure writer</strong>
-          <span className="molecule-brand-note">Web NMR</span>
-        </div>
-        <div className="molecule-toolbar-group">
-          <ToolButton
-            label="Undo (⌘/Ctrl Z)"
-            onClick={undoChange}
-            disabled={!undo.length}
-          >
-            <Undo2 size={17} />
-          </ToolButton>
-          <ToolButton
-            label="Redo (⌘/Ctrl Shift Z)"
-            onClick={redoChange}
-            disabled={!redo.length}
-          >
-            <Redo2 size={17} />
-          </ToolButton>
-          <span className="molecule-separator" />
-          <button
-            type="button"
-            className="molecule-text-tool"
-            onClick={() => {
-              try {
-                const cleaned = cleanMolecule(document);
-                commit(cleaned);
-                fit(cleaned);
-              } catch (failure) {
-                setError(
-                  failure instanceof Error
-                    ? failure.message
-                    : "Could not arrange structure.",
-                );
-              }
-            }}
-            disabled={!document.atoms.length}
-          >
-            <Sparkles size={15} />
-            Clean
-          </button>
-          <button
-            type="button"
-            className="molecule-text-tool"
-            onClick={() => {
-              setDialog("import");
-              setText("");
-              setError("");
-            }}
-          >
-            <ArrowDownToLine size={15} />
-            Import
-          </button>
-          <button
-            type="button"
-            className="molecule-text-tool"
-            onClick={() => openExport()}
-            disabled={!document.atoms.length}
-          >
-            <ArrowUpFromLine size={15} />
-            Export
-          </button>
-        </div>
+      <div
+        className="molecule-topbar"
+        role="toolbar"
+        aria-label="Structure actions"
+      >
+        <ToolButton
+          label="Clear canvas (undo available)"
+          disabled={!doc.atoms.length}
+          onClick={() => {
+            commit({
+              ...emptyMolecule(),
+              id: doc.id,
+              nextAtomIndex: doc.nextAtomIndex,
+            });
+            select([]);
+          }}
+        >
+          <Trash2 size={18} />
+        </ToolButton>
+        <button
+          className="molecule-text-tool"
+          onClick={() => {
+            setDialog("import");
+            setText("");
+            setError("");
+          }}
+          data-tooltip="Import SMILES or a molfile"
+        >
+          <FolderOpen size={18} />
+          <span>Import</span>
+        </button>
+        <ToolButton
+          label="Export structure (⌘/Ctrl S)"
+          disabled={!doc.atoms.length}
+          onClick={() => openExport("smiles")}
+        >
+          <ArrowDownToLine size={18} />
+        </ToolButton>
+        <span className="molecule-separator" />
+        <ToolButton
+          label="Undo (⌘/Ctrl Z)"
+          disabled={!undo.length}
+          onClick={undoChange}
+        >
+          <Undo2 size={18} />
+        </ToolButton>
+        <ToolButton
+          label="Redo (⌘/Ctrl Shift Z)"
+          disabled={!redo.length}
+          onClick={redoChange}
+        >
+          <Redo2 size={18} />
+        </ToolButton>
+        <span className="molecule-separator" />
+        <ToolButton
+          label="Copy selection (⌘/Ctrl C)"
+          disabled={!doc.atoms.length}
+          onClick={() => void copy()}
+        >
+          <Copy size={18} />
+        </ToolButton>
+        <ToolButton
+          label="Cut selection (⌘/Ctrl X)"
+          disabled={!selected.length}
+          onClick={() => void copy(true)}
+        >
+          <Scissors size={18} />
+        </ToolButton>
+        <ToolButton
+          label="Paste structure (⌘/Ctrl V)"
+          onClick={() => void paste()}
+        >
+          <ClipboardPaste size={18} />
+        </ToolButton>
+        <span className="molecule-separator" />
+        <button
+          className="molecule-text-tool"
+          disabled={!doc.atoms.length}
+          onClick={clean}
+          data-tooltip="Arrange bonds and rings (⌘/Ctrl L)"
+        >
+          <Sparkles size={18} />
+          <span>Clean up</span>
+        </button>
+        <span className="molecule-top-spacer" />
+        <ToolButton label="Fit structure to canvas" onClick={() => fit()}>
+          <Maximize2 size={18} />
+        </ToolButton>
+        <ToolButton
+          label="Drawing help and shortcuts"
+          onClick={() => setDialog("help")}
+        >
+          <HelpCircle size={18} />
+        </ToolButton>
+        <ToolButton
+          label={expanded ? "Exit expanded editor" : "Expand molecule editor"}
+          active={expanded}
+          onClick={() => setExpanded(!expanded)}
+        >
+          {expanded ? <Shrink size={18} /> : <Expand size={18} />}
+        </ToolButton>
       </div>
+      <form
+        className="molecule-smilesbar"
+        onSubmit={(e) => {
+          e.preventDefault();
+          importText(quick, "smiles");
+        }}
+      >
+        <span>SMILES</span>
+        <input
+          aria-label="Quick SMILES import"
+          placeholder="Paste a SMILES string to draw a structure…"
+          spellCheck={false}
+          value={quick}
+          onChange={(e) => setQuick(e.target.value)}
+        />
+        <button disabled={!quick.trim()} type="submit">
+          Insert <span>↵</span>
+        </button>
+      </form>
       <div className="molecule-editor-body">
+        <svg
+          ref={svg}
+          className={`molecule-canvas tool-${space ? "pan" : tool}`}
+          aria-label="Molecule drawing canvas"
+          tabIndex={0}
+          viewBox={`${view.pan.x - size.width / 2 / view.zoom} ${view.pan.y - size.height / 2 / view.zoom} ${size.width / view.zoom} ${size.height / view.zoom}`}
+          onPointerDown={pointerDown}
+          onPointerMove={pointerMove}
+          onPointerUp={pointerUp}
+          onPointerLeave={() => {
+            if (!gesture) {
+              setHover(null);
+              setHoverHit({});
+            }
+          }}
+          onPointerCancel={clearGesture}
+          onDoubleClick={(e) => {
+            const h = hit(point(e));
+            if (h.atomId && tool === "select") openAtom(h.atomId);
+          }}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            const h = hit(point(e));
+            if (h.atomId) openAtom(h.atomId);
+            else {
+              select([]);
+              setTool("select");
+            }
+          }}
+        >
+          <MoleculeGlyphs
+            molecule={display}
+            selectedAtomIds={selected}
+            showAtomNumbers={numbers}
+          />
+          {ghost && (
+            <g className="molecule-ring-ghost">
+              {ghost.bonds
+                .filter((b) => !doc.bonds.some((old) => old.id === b.id))
+                .map((b) => {
+                  const a = ghost.atoms.find((a) => a.id === b.from)!,
+                    c = ghost.atoms.find((a) => a.id === b.to)!;
+                  return (
+                    <line key={b.id} x1={a.x} y1={a.y} x2={c.x} y2={c.y} />
+                  );
+                })}
+            </g>
+          )}
+          {(!gesture || gesture.kind === "draw") && hoverAtom && (
+            <circle
+              className="molecule-hover-ring"
+              cx={hoverAtom.x}
+              cy={hoverAtom.y}
+              r={12 / view.zoom}
+            />
+          )}
+          {!gesture && hoverBond && (
+            <line
+              className="molecule-hover-bond"
+              x1={doc.atoms.find((a) => a.id === hoverBond.from)!.x}
+              y1={doc.atoms.find((a) => a.id === hoverBond.from)!.y}
+              x2={doc.atoms.find((a) => a.id === hoverBond.to)!.x}
+              y2={doc.atoms.find((a) => a.id === hoverBond.to)!.y}
+            />
+          )}
+          {gesture?.kind === "box" && (
+            <rect
+              className="molecule-selection-box"
+              x={Math.min(gesture.start.x, gesture.current.x)}
+              y={Math.min(gesture.start.y, gesture.current.y)}
+              width={Math.abs(gesture.start.x - gesture.current.x)}
+              height={Math.abs(gesture.start.y - gesture.current.y)}
+            />
+          )}
+        </svg>
         <div
           className="molecule-leftbar"
           role="toolbar"
           aria-label="Drawing tools"
         >
-          <ToolButton
-            label="Select and move atoms (drag to select)"
-            active={tool === "select"}
-            onClick={() => setTool("select")}
-          >
-            <MousePointer2 size={19} />
-          </ToolButton>
-          <ToolButton
-            label="Pan canvas (or hold Space)"
-            active={tool === "pan"}
-            onClick={() => setTool("pan")}
-          >
-            <Hand size={19} />
-          </ToolButton>
-          <ToolButton
-            label="Erase atom or bond"
-            active={tool === "erase"}
-            onClick={() => setTool("erase")}
-          >
-            <Eraser size={19} />
-          </ToolButton>
-          <span className="molecule-separator" />
-          {bondModes.map((mode, i) => (
+          <div className="molecule-tool-card">
             <ToolButton
-              key={mode.label}
-              label={mode.label}
-              active={tool === "bond" && bondMode === i}
-              onClick={() => {
-                setBondMode(i);
-                setTool("bond");
-              }}
+              label="Select and move (V)"
+              active={tool === "select"}
+              onClick={() => activate("select")}
             >
-              <span className={`molecule-bond-icon bond-${i}`}>
-                {mode.symbol}
-              </span>
+              <MousePointer2 size={21} />
             </ToolButton>
-          ))}
-          <span className="molecule-separator" />
-          <ToolButton
-            label="Increase atom charge"
-            active={tool === "charge-plus"}
-            onClick={() => adjustCharge(1)}
-          >
-            <Plus size={19} />
-          </ToolButton>
-          <ToolButton
-            label="Decrease atom charge"
-            active={tool === "charge-minus"}
-            onClick={() => adjustCharge(-1)}
-          >
-            <Minus size={19} />
-          </ToolButton>
-          <ToolButton
-            label="Delete selection"
-            onClick={deleteSelection}
-            disabled={!selected.length && !selectedBond}
-          >
-            <Trash2 size={17} />
-          </ToolButton>
-        </div>
-        <div className="molecule-canvas-wrap">
-          <svg
-            ref={svg}
-            className={`molecule-canvas tool-${spaceDown ? "pan" : tool}`}
-            aria-label="Molecule drawing canvas"
-            tabIndex={0}
-            viewBox={`${pan.x - 400 / zoom} ${pan.y - 260 / zoom} ${800 / zoom} ${520 / zoom}`}
-            onPointerDown={pointerDown}
-            onPointerMove={pointerMove}
-            onPointerUp={pointerUp}
-            onPointerCancel={() => {
-              gestureRef.current = null;
-              setGesture(null);
-              setPreview(null);
-            }}
-          >
-            <MoleculeGlyphs
-              molecule={display}
-              selectedAtomIds={selected}
-              showAtomNumbers={showNumbers}
-            />
-            {gesture?.kind === "bond" && (
-              <line
-                className="molecule-drawing-preview"
-                x1={gesture.start.x}
-                y1={gesture.start.y}
-                x2={gesture.current.x}
-                y2={gesture.current.y}
-              />
-            )}
-            {gesture?.kind === "box" && (
-              <rect
-                className="molecule-selection-box"
-                x={Math.min(gesture.start.x, gesture.current.x)}
-                y={Math.min(gesture.start.y, gesture.current.y)}
-                width={Math.abs(gesture.current.x - gesture.start.x)}
-                height={Math.abs(gesture.current.y - gesture.start.y)}
-              />
-            )}
-          </svg>
-          {!document.atoms.length && (
-            <div className="molecule-empty-guide">
-              <Hexagon size={36} strokeWidth={1.2} />
-              <strong>Draw your molecule</strong>
-              <span>
-                Drag to draw a bond, choose an element, or place a ring.
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  setDialog("import");
-                  setText("");
-                  setError("");
-                }}
+            <ToolButton
+              label="Pan canvas (hold Space)"
+              active={tool === "pan"}
+              onClick={() => activate("pan")}
+            >
+              <Hand size={21} />
+            </ToolButton>
+            <ToolButton
+              label="Erase atoms and bonds (E)"
+              active={tool === "erase"}
+              onClick={() => activate("erase")}
+            >
+              <Eraser size={21} />
+            </ToolButton>
+          </div>
+          <div className="molecule-tool-card molecule-palette-anchor">
+            <div className="molecule-bond-split">
+              <ToolButton
+                label={bondModes[bondMode].label}
+                active={tool === "bond"}
+                onClick={() => activate("bond")}
               >
-                Import SMILES or a molfile <ChevronDown size={13} />
+                <BondIcon mode={bondMode} />
+              </ToolButton>
+              <button
+                className="molecule-palette-toggle"
+                aria-label="Choose bond type"
+                aria-expanded={palette === "bonds"}
+                onClick={() => setPalette(palette === "bonds" ? null : "bonds")}
+              >
+                <ChevronDown size={10} />
               </button>
             </div>
-          )}
-          <div className="molecule-canvas-controls">
+            {palette === "bonds" && (
+              <div
+                className="molecule-bond-palette"
+                role="toolbar"
+                aria-label="Bond types"
+              >
+                {bondModes.map((m, i) => (
+                  <button
+                    key={m.label}
+                    aria-label={m.label}
+                    className={bondMode === i ? "chosen" : ""}
+                    onClick={() => {
+                      setBondMode(i);
+                      activate("bond");
+                    }}
+                  >
+                    <BondIcon mode={i} />
+                    <span>{m.label}</span>
+                    {bondMode === i && <Check size={14} />}
+                  </button>
+                ))}
+              </div>
+            )}
             <ToolButton
-              label="Zoom out"
-              onClick={() => setZoom((z) => Math.max(0.2, z / 1.2))}
+              label="Draw a carbon chain (drag)"
+              active={tool === "chain"}
+              onClick={() => activate("chain")}
             >
-              <ZoomOut size={16} />
+              <svg
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+              >
+                <path d="m2 15 5-7 5 7 5-7 5 7" />
+              </svg>
             </ToolButton>
-            <span>{Math.round(zoom * 100)}%</span>
             <ToolButton
-              label="Zoom in"
-              onClick={() => setZoom((z) => Math.min(4, z * 1.2))}
+              label="Increase atom charge (+)"
+              active={tool === "charge-plus"}
+              onClick={() => charge(1)}
             >
-              <ZoomIn size={16} />
+              <span className="molecule-charge-icon">
+                A<sup>+</sup>
+              </span>
             </ToolButton>
-            <ToolButton label="Fit structure to canvas" onClick={() => fit()}>
-              <RotateCcw size={15} />
+            <ToolButton
+              label="Decrease atom charge (−)"
+              active={tool === "charge-minus"}
+              onClick={() => charge(-1)}
+            >
+              <span className="molecule-charge-icon">
+                A<sup>−</sup>
+              </span>
             </ToolButton>
           </div>
         </div>
         <div className="molecule-rightbar" role="toolbar" aria-label="Elements">
-          <span className="molecule-toolbar-caption">ATOMS</span>
-          {moleculeElements.map((symbol) => (
-            <ToolButton
-              key={symbol}
-              label={`Draw or replace with ${symbol}`}
-              active={tool === "element" && element === symbol}
+          <div className="molecule-tool-card molecule-palette-anchor">
+            {["C", "N", "O", "S", "P", "F", "Cl", "Br", "H"].map((symbol) => (
+              <ToolButton
+                key={symbol}
+                label={`Draw or replace with ${symbol}`}
+                active={tool === "element" && element === symbol}
+                onClick={() => {
+                  if (selected.length) editElement(selected, symbol);
+                  setElement(symbol);
+                  activate("element");
+                }}
+              >
+                <span className={`element-${symbol}`}>{symbol}</span>
+              </ToolButton>
+            ))}
+            <button
+              className="molecule-tool"
+              aria-label="More elements"
+              data-tooltip="More elements"
+              onClick={() =>
+                setPalette(palette === "elements" ? null : "elements")
+              }
+            >
+              ···
+            </button>
+            {palette === "elements" && (
+              <div
+                className="molecule-element-palette"
+                role="toolbar"
+                aria-label="Additional elements"
+              >
+                {moleculeElements.map((symbol) => (
+                  <ToolButton
+                    key={symbol}
+                    label={`Choose ${symbol}`}
+                    onClick={() => {
+                      if (selected.length) editElement(selected, symbol);
+                      setElement(symbol);
+                      activate("element");
+                    }}
+                  >
+                    <span className={`element-${symbol}`}>{symbol}</span>
+                  </ToolButton>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+        {!doc.atoms.length && !gesture && (
+          <div className="molecule-empty-guide">
+            <div className="molecule-empty-mark">
+              <RingIcon aromatic />
+            </div>
+            <strong>Your molecule starts here</strong>
+            <span>
+              Click or drag to draw bonds.
+              <br />
+              Choose an atom on the right or a ring below.
+            </span>
+            <button
               onClick={() => {
-                setElement(symbol);
-                setTool("element");
+                setDialog("import");
+                setText("");
+                setError("");
               }}
             >
-              <span className={`element-${symbol}`}>{symbol}</span>
+              Import a structure instead
+            </button>
+          </div>
+        )}
+        <div
+          className="molecule-ringbar"
+          role="toolbar"
+          aria-label="Ring templates"
+        >
+          <ToolButton
+            label="Benzene ring (T)"
+            active={tool === "ring" && aromaticRing}
+            onClick={() => {
+              setRingSize(6);
+              setAromaticRing(true);
+              activate("ring");
+            }}
+          >
+            <RingIcon aromatic />
+          </ToolButton>
+          {[6, 5, 3, 4, 7, 8].map((n) => (
+            <ToolButton
+              key={n}
+              label={`${n}-membered carbon ring`}
+              active={tool === "ring" && ringSize === n && !aromaticRing}
+              onClick={() => {
+                setRingSize(n);
+                setAromaticRing(false);
+                activate("ring");
+              }}
+            >
+              <RingIcon size={n} />
             </ToolButton>
           ))}
         </div>
+        <div className="molecule-canvas-controls">
+          <ToolButton
+            label="Zoom out"
+            onClick={() =>
+              setView((v) => ({ ...v, zoom: Math.max(0.15, v.zoom / 1.2) }))
+            }
+          >
+            <ZoomOut size={17} />
+          </ToolButton>
+          <button
+            className="molecule-zoom-value"
+            onClick={() => setView((v) => ({ ...v, zoom: 1 }))}
+            data-tooltip="Reset zoom to 100%"
+          >
+            {Math.round(view.zoom * 100)}%
+          </button>
+          <ToolButton
+            label="Zoom in"
+            onClick={() =>
+              setView((v) => ({ ...v, zoom: Math.min(4, v.zoom * 1.2) }))
+            }
+          >
+            <ZoomIn size={17} />
+          </ToolButton>
+        </div>
+        {selected.length > 0 && tool === "select" && (
+          <div className="molecule-selection-actions">
+            <span>{selected.length} selected</span>
+            <ToolButton
+              label="Rotate selection 90°"
+              onClick={() => {
+                const atoms = doc.atoms.filter((a) => selected.includes(a.id)),
+                  cx = atoms.reduce((s, a) => s + a.x, 0) / atoms.length,
+                  cy = atoms.reduce((s, a) => s + a.y, 0) / atoms.length;
+                commit(
+                  moleculeChanged({
+                    ...doc,
+                    atoms: doc.atoms.map((a) =>
+                      selected.includes(a.id)
+                        ? { ...a, x: cx - (a.y - cy), y: cy + a.x - cx }
+                        : a,
+                    ),
+                  }),
+                );
+              }}
+            >
+              <RotateCw size={16} />
+            </ToolButton>
+            <ToolButton label="Delete selection" onClick={remove}>
+              <Trash2 size={16} />
+            </ToolButton>
+            <ToolButton
+              label="Deselect"
+              onClick={() => {
+                select([]);
+                setSelectedBond(null);
+              }}
+            >
+              <X size={16} />
+            </ToolButton>
+          </div>
+        )}
       </div>
       <div
-        className="molecule-ringbar"
-        role="toolbar"
-        aria-label="Ring templates"
+        className={`molecule-statusbar ${error || warnings.length ? "has-warning" : ""}`}
+        aria-live="polite"
       >
-        <span className="molecule-toolbar-caption">RINGS</span>
-        <ToolButton
-          label="Benzene ring"
-          active={tool === "ring" && aromaticRing}
-          onClick={() => {
-            setRingSize(6);
-            setAromaticRing(true);
-            setTool("ring");
-          }}
-        >
-          <span className="molecule-ring-template">
-            <Hexagon size={23} />
-            <span className="molecule-aromatic-circle" />
-          </span>
-        </ToolButton>
-        {[3, 4, 5, 6, 7, 8].map((size) => (
-          <ToolButton
-            key={size}
-            label={`${size}-membered carbon ring`}
-            active={tool === "ring" && ringSize === size && !aromaticRing}
-            onClick={() => {
-              setRingSize(size);
-              setAromaticRing(false);
-              setTool("ring");
-            }}
-          >
-            <svg width="25" height="25" viewBox="0 0 26 26" aria-hidden="true">
-              <polygon
-                points={Array.from(
-                  { length: size },
-                  (_, i) =>
-                    `${13 + 10 * Math.cos(-Math.PI / 2 + (i * 2 * Math.PI) / size)},${13 + 10 * Math.sin(-Math.PI / 2 + (i * 2 * Math.PI) / size)}`,
-                ).join(" ")}
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.5"
-              />
-              <text
-                x="13"
-                y="16"
-                textAnchor="middle"
-                fontSize="8"
-                fill="currentColor"
-              >
-                {size}
-              </text>
-            </svg>
-          </ToolButton>
-        ))}
-        <span className="molecule-ringbar-spacer" />
-        <label className="molecule-number-toggle">
-          <input
-            type="checkbox"
-            checked={showNumbers}
-            onChange={(event) => setShowNumbers(event.target.checked)}
-          />
-          Atom numbers
-        </label>
-      </div>
-      <div className="molecule-statusbar" aria-live="polite">
-        <span>
+        <span className="molecule-active-tool">
+          {names[space ? "pan" : tool]}
+        </span>
+        <span className="molecule-status-message">
           {error ||
             notice ||
             warnings[0] ||
             (tool === "bond"
-              ? "Drag bonds · click a bond to change its type · Alt for free angles"
+              ? "Click to extend · drag to connect · 1 / 2 / 3 for bond order"
               : tool === "ring"
-                ? "Click to place a ring · click an atom to attach it"
+                ? "Click to place · click an atom to attach · click a bond to fuse"
                 : tool === "element"
-                  ? `Click to place ${element} or replace an atom`
+                  ? `Click an atom to replace it · drag to attach ${element}`
                   : tool === "select"
-                    ? "Drag to move · Shift to add selection · Delete to erase"
-                    : "Click an atom or bond to edit")}
+                    ? "Drag to select or move · Shift adds selection · double-click an atom to edit"
+                    : "Space to pan · scroll to zoom")}
         </span>
-        <span>
-          {document.atoms.length} atoms · {document.bonds.length} bonds
-          {selected.length ? ` · ${selected.length} selected` : ""}
-        </span>
+        <label className="molecule-number-toggle">
+          <input
+            type="checkbox"
+            checked={numbers}
+            onChange={(e) => setNumbers(e.target.checked)}
+          />
+          Numbers
+        </label>
+        <span className="molecule-count">{doc.atoms.length} atoms</span>
       </div>
       {dialog && (
         <div
           className="molecule-dialog-backdrop"
-          onPointerDown={(event) => event.stopPropagation()}
+          onPointerDown={(e) => {
+            if (e.target === e.currentTarget) setDialog(null);
+          }}
         >
           <section
             className="molecule-dialog"
             role="dialog"
             aria-modal="true"
             aria-label={
-              dialog === "import" ? "Import structure" : "Export structure"
+              dialog === "atom"
+                ? "Atom properties"
+                : dialog === "help"
+                  ? "Drawing help"
+                  : dialog === "import"
+                    ? "Import structure"
+                    : "Export structure"
             }
           >
             <div className="molecule-dialog-heading">
               <strong>
-                {dialog === "import" ? "Import structure" : "Export structure"}
+                {dialog === "atom"
+                  ? "Atom properties"
+                  : dialog === "help"
+                    ? "Drawing a molecule"
+                    : dialog === "import"
+                      ? "Import structure"
+                      : "Export structure"}
               </strong>
               <ToolButton
                 label="Close structure dialog"
@@ -959,114 +1398,271 @@ export function MoleculeEditor({
                 <X size={18} />
               </ToolButton>
             </div>
-            <p>
-              {dialog === "import"
-                ? "Paste SMILES or a molfile. Import replaces the current drawing and starts a new set of atom numbers."
-                : "Copy or download your structure for use in other chemistry software."}
-            </p>
-            <label className="molecule-format-label">
-              Format
-              <select
-                value={format}
-                onChange={(event) => {
-                  const next = event.target.value as "smiles" | "molfile";
-                  setFormat(next);
-                  setError("");
-                  if (dialog === "export") openExport(next);
-                }}
-              >
-                <option value="smiles">SMILES</option>
-                <option value="molfile">MDL molfile</option>
-              </select>
-            </label>
-            <textarea
-              aria-label={
-                format === "smiles" ? "SMILES structure" : "Molfile structure"
-              }
-              value={text}
-              onChange={(event) => setText(event.target.value)}
-              readOnly={dialog === "export"}
-              autoFocus
-              spellCheck={false}
-              placeholder={
-                format === "smiles"
-                  ? "Example: CC(=O)Oc1ccccc1C(=O)O"
-                  : "Paste the contents of a .mol file"
-              }
-            />
+            {dialog === "help" ? (
+              <>
+                <p>
+                  Start with a bond, an atom, or a ring. The drawing stays
+                  entirely in your browser.
+                </p>
+                <dl className="molecule-help">
+                  <dt>Draw bonds</dt>
+                  <dd>
+                    Click empty space for a bond, click its end to extend, or
+                    drag between atoms. Nearby atoms snap together.
+                  </dd>
+                  <dt>Build rings</dt>
+                  <dd>
+                    Choose a ring below, then click to place. Click an atom to
+                    attach or a bond to fuse a ring.
+                  </dd>
+                  <dt>Edit atoms</dt>
+                  <dd>
+                    Choose an element and click an atom. Hover an atom and type
+                    C, N, O, S, P, F, L (Cl), B (Br), I or H. Double-click for
+                    charge and isotope.
+                  </dd>
+                  <dt>Select & move</dt>
+                  <dd>
+                    V selects. Drag around atoms or move selected atoms. Shift
+                    adds to selection. Delete removes.
+                  </dd>
+                  <dt>Navigate</dt>
+                  <dd>
+                    Hold Space to pan. Scroll to zoom around the pointer. Fit
+                    centers the structure.
+                  </dd>
+                  <dt>Shortcuts</dt>
+                  <dd>
+                    1 / 2 / 3: bond order · T: benzene · E: erase · ⌘/Ctrl Z:
+                    undo · ⌘/Ctrl L: clean up · ⌘/Ctrl C / V: copy / paste ·
+                    Esc: cancel.
+                  </dd>
+                </dl>
+              </>
+            ) : dialog === "atom" ? (
+              <>
+                <p>
+                  Atom {doc.atoms.find((a) => a.id === atomEdit.id)?.index}. Its
+                  assignment number stays the same when edited.
+                </p>
+                <div className="molecule-atom-fields">
+                  <label>
+                    Element
+                    <select
+                      value={atomEdit.element}
+                      onChange={(e) =>
+                        setAtomEdit({ ...atomEdit, element: e.target.value })
+                      }
+                    >
+                      {[
+                        ...new Set([...moleculeElements, atomEdit.element]),
+                      ].map((s) => (
+                        <option key={s}>{s}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Charge
+                    <input
+                      type="number"
+                      min="-8"
+                      max="8"
+                      step="1"
+                      value={atomEdit.charge}
+                      onChange={(e) =>
+                        setAtomEdit({
+                          ...atomEdit,
+                          charge: e.target.valueAsNumber,
+                        })
+                      }
+                    />
+                  </label>
+                  <label>
+                    Isotope mass
+                    <input
+                      type="number"
+                      min="1"
+                      max="300"
+                      placeholder="Natural"
+                      value={atomEdit.isotope}
+                      onChange={(e) =>
+                        setAtomEdit({ ...atomEdit, isotope: e.target.value })
+                      }
+                    />
+                  </label>
+                </div>
+                <button
+                  className="molecule-primary"
+                  onClick={() => {
+                    const next = moleculeChanged({
+                      ...doc,
+                      atoms: doc.atoms.map((a) =>
+                        a.id === atomEdit.id
+                          ? {
+                              ...a,
+                              element: atomEdit.element,
+                              charge: atomEdit.charge,
+                              isotope: atomEdit.isotope
+                                ? Number(atomEdit.isotope)
+                                : undefined,
+                            }
+                          : a,
+                      ),
+                    });
+                    const errors = validateMolecule(next);
+                    if (errors.length) {
+                      setError(errors[0]);
+                      return;
+                    }
+                    commit(next);
+                    setDialog(null);
+                  }}
+                >
+                  Apply changes
+                </button>
+              </>
+            ) : (
+              <>
+                <p>
+                  {dialog === "import"
+                    ? "Paste a SMILES string or open a structure file. Import replaces the drawing; Undo restores it."
+                    : "Copy or download the structure for other chemistry software."}
+                </p>
+                <div className="molecule-format-tabs">
+                  <button
+                    className={format === "smiles" ? "active" : ""}
+                    onClick={() => {
+                      setFormat("smiles");
+                      if (dialog === "export") openExport("smiles");
+                    }}
+                  >
+                    SMILES
+                  </button>
+                  <button
+                    className={format === "molfile" ? "active" : ""}
+                    onClick={() => {
+                      setFormat("molfile");
+                      if (dialog === "export") openExport("molfile");
+                    }}
+                  >
+                    Molfile
+                  </button>
+                </div>
+                <textarea
+                  aria-label={
+                    format === "smiles"
+                      ? "SMILES structure"
+                      : "Molfile structure"
+                  }
+                  autoFocus
+                  spellCheck={false}
+                  value={text}
+                  readOnly={dialog === "export"}
+                  onChange={(e) => setText(e.target.value)}
+                  placeholder={
+                    format === "smiles"
+                      ? "e.g. CC(=O)Oc1ccccc1C(=O)O"
+                      : "Paste a V2000 or V3000 molfile"
+                  }
+                />
+                <div className="molecule-dialog-actions">
+                  {dialog === "import" ? (
+                    <>
+                      <button onClick={() => fileInput.current?.click()}>
+                        <FolderOpen size={16} />
+                        Open file
+                      </button>
+                      <button
+                        className="molecule-primary"
+                        disabled={!text.trim()}
+                        onClick={() => importText()}
+                      >
+                        <Check size={16} />
+                        Import structure
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(text);
+                            setNotice("Structure copied.");
+                            setDialog(null);
+                          } catch {
+                            setError(
+                              "Select the text and copy using your keyboard.",
+                            );
+                          }
+                        }}
+                      >
+                        <Copy size={16} />
+                        Copy
+                      </button>
+                      <button
+                        className="molecule-primary"
+                        onClick={() => {
+                          const url = URL.createObjectURL(
+                              new Blob([text], { type: "text/plain" }),
+                            ),
+                            a = window.document.createElement("a");
+                          a.href = url;
+                          a.download =
+                            format === "smiles"
+                              ? "structure.smi"
+                              : "structure.mol";
+                          a.click();
+                          URL.revokeObjectURL(url);
+                        }}
+                      >
+                        <ArrowDownToLine size={16} />
+                        Download
+                      </button>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
             {error && (
               <div className="molecule-dialog-error" role="alert">
                 {error}
               </div>
             )}
-            <div className="molecule-dialog-actions">
-              {dialog === "import" ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => fileInput.current?.click()}
-                  >
-                    <ArrowDownToLine size={15} />
-                    Open .mol file
-                  </button>
-                  <button
-                    type="button"
-                    className="primary"
-                    onClick={doImport}
-                    disabled={!text.trim()}
-                  >
-                    <Check size={15} />
-                    Import structure
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        await navigator.clipboard.writeText(text);
-                        setNotice("Structure copied.");
-                      } catch {
-                        setError(
-                          "Select the structure text and copy it with your keyboard.",
-                        );
-                      }
-                    }}
-                  >
-                    <Copy size={15} />
-                    Copy
-                  </button>
-                  <button type="button" className="primary" onClick={download}>
-                    <ArrowDownToLine size={15} />
-                    Download {format === "smiles" ? ".smi" : ".mol"}
-                  </button>
-                </>
-              )}
-            </div>
-            <input
-              ref={fileInput}
-              type="file"
-              accept=".mol,.sdf,.smi,.smiles,text/plain"
-              hidden
-              onChange={async (event) => {
-                const file = event.target.files?.[0];
-                if (!file) return;
-                try {
-                  setText((await file.text()).split("$$$$")[0]);
-                  setFormat(
-                    /\.(smi|smiles)$/i.test(file.name) ? "smiles" : "molfile",
-                  );
-                  setError("");
-                } catch {
-                  setError("Could not read this file.");
-                }
-                event.target.value = "";
-              }}
-            />
           </section>
         </div>
       )}
+      <input
+        ref={fileInput}
+        type="file"
+        accept=".mol,.sdf,.smi,.smiles,text/plain"
+        hidden
+        onChange={async (e) => {
+          const file = e.target.files?.[0];
+          if (!file) return;
+          try {
+            setText((await file.text()).split("$$$$")[0]);
+            setFormat(
+              /\.(smi|smiles)$/i.test(file.name) ? "smiles" : "molfile",
+            );
+            setError("");
+          } catch {
+            setError("Could not read this file.");
+          }
+          e.target.value = "";
+        }}
+      />
     </div>
   );
 }
+const shortcutElements: Record<string, string> = {
+  c: "C",
+  n: "N",
+  o: "O",
+  s: "S",
+  p: "P",
+  f: "F",
+  l: "Cl",
+  b: "Br",
+  i: "I",
+  h: "H",
+};

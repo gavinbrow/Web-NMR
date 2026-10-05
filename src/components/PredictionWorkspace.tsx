@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { Atom, Check, ChevronDown, LoaderCircle, Play, X } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  LoaderCircle,
+  Play,
+  X,
+  Settings2,
+  ShieldCheck,
+} from "lucide-react";
 import { MoleculeEditor } from "./MoleculeEditor";
 import {
   exportMoleculeMolfile,
@@ -61,7 +69,8 @@ export default function PredictionWorkspace(p: Props) {
     [result, setResult] = useState<PredictionResult | null>(
       p.previousResult ?? null,
     ),
-    [details, setDetails] = useState(false);
+    [details, setDetails] = useState(false),
+    [settingsOpen, setSettingsOpen] = useState(false);
   const abort = useRef<AbortController | null>(null);
   useEffect(
     () => () => {
@@ -118,10 +127,54 @@ export default function PredictionWorkspace(p: Props) {
       data-shortcuts="molecule"
     >
       <div className="prediction-heading">
-        <Atom size={19} />
-        <strong>Prediction</strong>
-        <span>Draw a structure, import SMILES, then predict.</span>
-        <small>All calculations stay in your browser</small>
+        <strong>Molecule editor</strong>
+        <small>
+          <ShieldCheck size={13} /> Client-side prediction
+        </small>
+        <div
+          className="prediction-nucleus-switch"
+          role="group"
+          aria-label="Prediction nucleus"
+        >
+          {(["1H", "13C"] as const).map((nucleus) => (
+            <button
+              key={nucleus}
+              disabled={running}
+              aria-pressed={p.setup.nucleus === nucleus}
+              onClick={() =>
+                settings({
+                  nucleus,
+                  frequencyMHz: nucleus === "13C" ? 100.6 : 400,
+                })
+              }
+            >
+              {nucleus === "1H" ? "¹H" : "¹³C"}
+            </button>
+          ))}
+        </div>
+        <button
+          className="primary prediction-header-run"
+          disabled={!p.setup.molecule?.atoms.length || running}
+          onClick={() => void predict()}
+          title="Predict chemical shifts and add a new spectrum"
+        >
+          {running ? (
+            <LoaderCircle size={15} className="spin" />
+          ) : (
+            <Play size={14} />
+          )}
+          {running ? "Predicting…" : "Predict spectrum"}
+        </button>
+        <button
+          className={`prediction-settings-toggle ${settingsOpen ? "active" : ""}`}
+          aria-label="Prediction settings"
+          aria-expanded={settingsOpen}
+          title="Frequency, linewidth, spectrum title, and match details"
+          onClick={() => setSettingsOpen(!settingsOpen)}
+        >
+          <Settings2 size={16} />
+          <span>Settings</span>
+        </button>
       </div>
       <div className="prediction-layout">
         <div className="prediction-editor">
@@ -130,165 +183,204 @@ export default function PredictionWorkspace(p: Props) {
             onChange={(molecule) => settings({ molecule })}
           />
         </div>
-        <aside className="prediction-settings" aria-label="Prediction settings">
-          <h2>Predict a spectrum</h2>
-          <label>
-            Experiment
-            <select
-              value={p.setup.nucleus}
-              disabled={running}
-              onChange={(e) =>
-                settings({
-                  nucleus: e.target.value as "1H" | "13C",
-                  frequencyMHz: e.target.value === "13C" ? 100.6 : 400,
-                })
-              }
-            >
-              <option value="1H">¹H proton</option>
-              <option value="13C">¹³C carbon</option>
-            </select>
-          </label>
-          <div className="prediction-field-pair">
-            <PredictionNumber
-              label="Frequency (MHz)"
-              value={p.setup.frequencyMHz}
-              min={10}
-              max={2000}
-              disabled={running}
-              onChange={(frequencyMHz) => settings({ frequencyMHz })}
-            />
-            <PredictionNumber
-              label="Linewidth (Hz)"
-              value={p.setup.lineWidthHz}
-              min={0.1}
-              max={100}
-              disabled={running}
-              onChange={(lineWidthHz) => settings({ lineWidthHz })}
-            />
-          </div>
-          <label>
-            Spectrum title
-            <input
-              placeholder="Predicted spectrum"
-              maxLength={500}
-              value={p.setup.title}
-              disabled={running}
-              onChange={(e) => settings({ title: e.target.value })}
-            />
-          </label>
-          <div className="prediction-engine">
-            <Check size={15} />
-            <div>
-              <strong>CDK environment lookup</strong>
-              <span>
-                Experimental nmrshiftdb environments. Database matches determine
-                the shifts.
-              </span>
-            </div>
-          </div>
-          <button
-            className="primary prediction-run"
-            disabled={!p.setup.molecule?.atoms.length || running}
-            onClick={() => void predict()}
-            title="Predict chemical shifts and add a new spectrum to this project"
+        {settingsOpen && (
+          <div
+            className="prediction-settings-scrim"
+            onClick={() => setSettingsOpen(false)}
+          />
+        )}
+        {settingsOpen && (
+          <aside
+            className="prediction-settings"
+            aria-label="Prediction settings"
           >
-            {running ? (
-              <LoaderCircle size={17} className="spin" />
-            ) : (
-              <Play size={16} />
-            )}{" "}
-            {running ? "Predicting…" : `Predict ${p.setup.nucleus}`}
-          </button>
-          {running && (
-            <div className="prediction-progress" role="status">
-              <span>{progress}</span>
+            <div className="prediction-settings-heading">
+              <h2>Prediction settings</h2>
               <button
                 className="icon-button"
-                aria-label="Cancel prediction"
-                onClick={() => {
-                  abort.current?.abort();
-                  setRunning(false);
-                }}
+                aria-label="Close prediction settings"
+                onClick={() => setSettingsOpen(false)}
               >
-                <X size={15} />
+                <X size={17} />
               </button>
             </div>
-          )}
-          {error && (
-            <div className="prediction-error" role="alert">
-              {error}
-            </div>
-          )}
-          <button
-            className="secondary"
-            disabled={
-              !p.setup.molecule?.atoms.length || !p.canAttach || running
-            }
-            onClick={p.onAttach}
-            title="Place this molecule on the active spectrum, then assign its atoms to peaks"
-          >
-            Place on current spectrum
-          </button>
-          <p className="prediction-note">
-            Predictions create a new spectrum in the list on the left. Signals
-            are unsplit; this engine does not calculate coupling constants.
-          </p>
-          <a
-            className="prediction-attribution"
-            href="/prediction/about.html"
-            target="_blank"
-            rel="noreferrer"
-          >
-            Reference data, licenses & source
-          </a>
-          {result && (
-            <div className="prediction-result">
-              <button
-                className="prediction-details"
-                onClick={() => setDetails(!details)}
+            <label>
+              Experiment
+              <select
+                value={p.setup.nucleus}
+                disabled={running}
+                onChange={(e) =>
+                  settings({
+                    nucleus: e.target.value as "1H" | "13C",
+                    frequencyMHz: e.target.value === "13C" ? 100.6 : 400,
+                  })
+                }
               >
-                <Check size={15} />
-                {result.shifts.length} environments matched
-                <ChevronDown size={14} />
-              </button>
-              {result.warnings.map((w, i) => (
-                <p key={i}>{w}</p>
-              ))}
-              {details && (
-                <div className="prediction-match-table">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Atom</th>
-                        <th>δ / ppm</th>
-                        <th>Radius</th>
-                        <th>Matches</th>
-                        <th>Range / ppm</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {result.shifts.map((s, i) => (
-                        <tr key={i}>
-                          <td>
-                            {p.setup.molecule?.atoms[s.atomIndex]?.element}
-                            {p.setup.molecule?.atoms[s.atomIndex]?.index}
-                          </td>
-                          <td>{s.shiftPpm.toFixed(3)}</td>
-                          <td>{s.radius}</td>
-                          <td>{s.sampleCount}</td>
-                          <td>
-                            {s.minPpm.toFixed(2)}–{s.maxPpm.toFixed(2)}
-                          </td>
+                <option value="1H">¹H proton</option>
+                <option value="13C">¹³C carbon</option>
+              </select>
+            </label>
+            <div className="prediction-field-pair">
+              <PredictionNumber
+                label="Frequency (MHz)"
+                value={p.setup.frequencyMHz}
+                min={10}
+                max={2000}
+                disabled={running}
+                onChange={(frequencyMHz) => settings({ frequencyMHz })}
+              />
+              <PredictionNumber
+                label="Linewidth (Hz)"
+                value={p.setup.lineWidthHz}
+                min={0.1}
+                max={100}
+                disabled={running}
+                onChange={(lineWidthHz) => settings({ lineWidthHz })}
+              />
+            </div>
+            <label>
+              Spectrum title
+              <input
+                placeholder="Predicted spectrum"
+                maxLength={500}
+                value={p.setup.title}
+                disabled={running}
+                onChange={(e) => settings({ title: e.target.value })}
+              />
+            </label>
+            <div className="prediction-engine">
+              <Check size={15} />
+              <div>
+                <strong>CDK environment lookup</strong>
+                <span>
+                  Experimental nmrshiftdb environments. Database matches
+                  determine the shifts.
+                </span>
+              </div>
+            </div>
+            <button
+              className="primary prediction-run"
+              disabled={!p.setup.molecule?.atoms.length || running}
+              onClick={() => void predict()}
+              title="Predict chemical shifts and add a new spectrum to this project"
+            >
+              {running ? (
+                <LoaderCircle size={17} className="spin" />
+              ) : (
+                <Play size={16} />
+              )}{" "}
+              {running ? "Predicting…" : `Predict ${p.setup.nucleus}`}
+            </button>
+            {running && (
+              <div className="prediction-progress" role="status">
+                <span>{progress}</span>
+                <button
+                  className="icon-button"
+                  aria-label="Cancel prediction"
+                  onClick={() => {
+                    abort.current?.abort();
+                    setRunning(false);
+                  }}
+                >
+                  <X size={15} />
+                </button>
+              </div>
+            )}
+            {error && (
+              <div className="prediction-error" role="alert">
+                {error}
+              </div>
+            )}
+            <button
+              className="secondary"
+              disabled={
+                !p.setup.molecule?.atoms.length || !p.canAttach || running
+              }
+              onClick={p.onAttach}
+              title="Place this molecule on the active spectrum, then assign its atoms to peaks"
+            >
+              Place on current spectrum
+            </button>
+            <p className="prediction-note">
+              Predictions create a new spectrum in the list on the left. Signals
+              are unsplit; this engine does not calculate coupling constants.
+            </p>
+            <a
+              className="prediction-attribution"
+              href="/prediction/about.html"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Reference data, licenses & source
+            </a>
+            {result && (
+              <div className="prediction-result">
+                <button
+                  className="prediction-details"
+                  onClick={() => setDetails(!details)}
+                >
+                  <Check size={15} />
+                  {result.shifts.length} environments matched
+                  <ChevronDown size={14} />
+                </button>
+                {result.warnings.map((w, i) => (
+                  <p key={i}>{w}</p>
+                ))}
+                {details && (
+                  <div className="prediction-match-table">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Atom</th>
+                          <th>δ / ppm</th>
+                          <th>Radius</th>
+                          <th>Matches</th>
+                          <th>Range / ppm</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          )}
-        </aside>
+                      </thead>
+                      <tbody>
+                        {result.shifts.map((s, i) => (
+                          <tr key={i}>
+                            <td>
+                              {p.setup.molecule?.atoms[s.atomIndex]?.element}
+                              {p.setup.molecule?.atoms[s.atomIndex]?.index}
+                            </td>
+                            <td>{s.shiftPpm.toFixed(3)}</td>
+                            <td>{s.radius}</td>
+                            <td>{s.sampleCount}</td>
+                            <td>
+                              {s.minPpm.toFixed(2)}–{s.maxPpm.toFixed(2)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+          </aside>
+        )}
       </div>
+      {running && (
+        <div className="prediction-status">
+          <LoaderCircle className="spin" size={13} />
+          <span>{progress}</span>
+          <button
+            onClick={() => {
+              abort.current?.abort();
+              setRunning(false);
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+      {error && !settingsOpen && (
+        <div className="prediction-error" role="alert">
+          {error}
+        </div>
+      )}
     </section>
   );
 }

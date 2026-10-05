@@ -4,31 +4,76 @@
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-  padding: 12px;
-  gap: 10px;
+  padding: 9px 12px 12px;
+  gap: 7px;
+  position: relative;
 }
 .prediction-heading {
   display: flex;
   align-items: center;
-  gap: 9px;
-  min-height: 30px;
+  gap: 10px;
+  min-height: 35px;
   font-size: 13px;
+  flex-shrink: 0;
 }
-.prediction-heading > svg {
-  color: #45a4ef;
-}
-.prediction-heading > span {
-  color: #a6b0be;
+.prediction-heading > strong {
+  font-size: 12px;
+  font-weight: 600;
+  color: #d5dee9;
 }
 .prediction-heading > small {
-  margin-left: auto;
-  color: #9ba7b4;
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  margin-right: auto;
+  color: #8c9caa;
+  font-size: 10px;
+}
+.prediction-nucleus-switch {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid #46545e;
+  border-radius: 6px;
+  background: #232b33;
+}
+.prediction-nucleus-switch button {
+  background: transparent;
+  color: #acbac8;
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.prediction-nucleus-switch button[aria-pressed="true"] {
+  color: #b9eef5;
+  background: #1c5762;
+}
+.prediction-header-run {
+  padding: 8px 13px !important;
+  font-size: 12px !important;
+  border-radius: 6px !important;
+  gap: 6px !important;
+}
+.prediction-settings-toggle {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: #b3c4cf;
+  padding: 8px 10px;
+  background: #323d47;
+  border: 1px solid #495965;
+  border-radius: 6px;
   font-size: 11px;
 }
+.prediction-settings-toggle.active {
+  color: #b1e9f2;
+  background: #1c5561;
+  border-color: #36727e;
+}
 .prediction-layout {
+  position: relative;
   display: flex;
   flex: 1;
-  gap: 12px;
   min-height: 0;
 }
 .prediction-editor {
@@ -36,43 +81,57 @@
   min-width: 0;
   min-height: 0;
   display: flex;
-  border: 1px solid #464f5d;
-  border-radius: 8px;
-  overflow: hidden;
 }
 .prediction-editor .molecule-editor {
-  display: flex;
-  flex-direction: column;
   min-height: 0;
 }
-.prediction-editor .molecule-topbar,
-.prediction-editor .molecule-ringbar,
-.prediction-editor .molecule-statusbar {
-  flex-shrink: 0;
-}
-.prediction-editor .molecule-editor-body {
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-.prediction-editor .molecule-canvas {
-  min-height: 0;
-}
-.prediction-editor .molecule-leftbar,
-.prediction-editor .molecule-rightbar {
-  min-height: 0;
-  overflow-y: auto;
+.prediction-settings-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: #10151b40;
+  border-radius: 10px;
 }
 .prediction-settings {
-  width: 300px;
-  min-width: 245px;
-  max-width: 45%;
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  bottom: 8px;
+  z-index: 21;
+  width: 310px;
+  max-width: calc(100% - 16px);
   overflow: auto;
-  resize: horizontal;
   padding: 17px;
-  background: #24282f;
-  border: 1px solid #444c58;
-  border-radius: 8px;
+  background: #242c34;
+  border: 1px solid #536171;
+  border-radius: 9px;
+  box-shadow: 0 10px 30px #0005;
+}
+.prediction-settings-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 17px;
+}
+.prediction-settings-heading h2 {
+  margin: 0 !important;
+  font-size: 15px !important;
+}
+.prediction-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 25px;
+  font-size: 11px;
+  color: #99dce7;
+}
+.prediction-status > button {
+  margin-left: auto;
+  font-size: 11px;
+  color: #bad2db;
+  padding: 3px 8px;
+  background: #35414b;
+  border-radius: 4px;
 }
 .prediction-settings h2 {
   font-size: 16px;
@@ -198,34 +257,29 @@
   text-decoration: underline;
   margin-top: 18px;
 }
-@media (max-width: 1000px) {
-  .prediction-layout {
-    flex-direction: column;
-    overflow: auto;
+
+@media (max-width: 760px) {
+  .prediction-workspace {
+    padding: 7px;
   }
-  .prediction-editor {
-    min-height: 570px;
-    flex: none;
-  }
-  .prediction-settings {
-    width: 100%;
-    max-width: none;
-    min-width: 0;
-    resize: none;
-    overflow: visible;
+  .prediction-heading {
+    gap: 6px;
   }
   .prediction-heading > small {
     display: none;
   }
-}
-@media (max-width: 650px) {
-  .prediction-editor {
-    min-height: 570px;
+  .prediction-heading > strong {
+    margin-right: auto;
+    font-size: 11px;
   }
-  .prediction-heading > span {
+  .prediction-settings-toggle span {
     display: none;
   }
-  .prediction-workspace {
-    padding: 8px;
+  .prediction-header-run {
+    font-size: 11px !important;
+    padding: 7px 9px !important;
+  }
+  .prediction-nucleus-switch button {
+    padding: 4px 8px;
   }
 }

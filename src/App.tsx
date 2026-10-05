@@ -4194,7 +4194,7 @@ export default function App() {
           />
         )}
         <main className="workspace">
-          {tab !== "Kinetics" && (
+          {tab !== "Kinetics" && tab !== "Prediction" && (
             <div className="workspace-toolbar">
               <div className="breadcrumbs">
                 <span>{isDemo ? "Example project" : projectName}</span>

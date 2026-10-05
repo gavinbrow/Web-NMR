@@ -174,12 +174,16 @@ export function moleculeBounds(
   const xs = document.atoms.map((a) => a.x),
     ys = document.atoms.map((a) => a.y);
   const minX = Math.min(...xs),
-    minY = Math.min(...ys);
+    minY = Math.min(...ys),
+    maxX = Math.max(...xs),
+    maxY = Math.max(...ys);
+  const width = Math.max(80, maxX - minX + padding * 2),
+    height = Math.max(80, maxY - minY + padding * 2);
   return {
-    x: minX - padding,
-    y: minY - padding,
-    width: Math.max(80, Math.max(...xs) - minX + padding * 2),
-    height: Math.max(80, Math.max(...ys) - minY + padding * 2),
+    x: (minX + maxX - width) / 2,
+    y: (minY + maxY - height) / 2,
+    width,
+    height,
   };
 }
 export function validateMolecule(document: MoleculeDocument): string[] {
@@ -451,6 +455,8 @@ export function importMolecule(
     ).every((distance) => distance < 0.001);
   if (format === "smiles" || overlapping) molecule.inventCoordinates();
   molecule.ensureHelperArrays(Molecule.cHelperRings);
+  const drawingScale =
+    moleculeBondLength / (molecule.getAverageBondLength(false) || 1);
   const result = emptyMolecule();
   const internalAtomIds: string[] = [];
   for (let i = 0; i < molecule.getAllAtoms(); i++) {
@@ -460,8 +466,8 @@ export function importMolecule(
       id,
       index: molecule.getAtomMapNo(i),
       element: molecule.getAtomLabel(i),
-      x: molecule.getAtomX(i) * moleculeBondLength,
-      y: molecule.getAtomY(i) * moleculeBondLength,
+      x: molecule.getAtomX(i) * drawingScale,
+      y: molecule.getAtomY(i) * drawingScale,
       charge: molecule.getAtomCharge(i),
       ...(molecule.getAtomMass(i) ? { isotope: molecule.getAtomMass(i) } : {}),
     });
@@ -514,12 +520,14 @@ export function cleanMolecule(document: MoleculeDocument): MoleculeDocument {
     molecule.setAtomMapNo(i, atom.index, false),
   );
   molecule.inventCoordinates();
+  const drawingScale =
+    moleculeBondLength / (molecule.getAverageBondLength(false) || 1);
   const coordinates = new Map(
     Array.from({ length: molecule.getAllAtoms() }, (_, i) => [
       molecule.getAtomMapNo(i),
       {
-        x: molecule.getAtomX(i) * moleculeBondLength,
-        y: molecule.getAtomY(i) * moleculeBondLength,
+        x: molecule.getAtomX(i) * drawingScale,
+        y: molecule.getAtomY(i) * drawingScale,
       },
     ]),
   );
@@ -536,6 +544,54 @@ export function cleanMolecule(document: MoleculeDocument): MoleculeDocument {
       y: a.y - bounds.y - bounds.height / 2,
     })),
   });
+}
+
+/** Chemistry-derived implicit H counts, mapped back after helper arrays reorder H. */
+export function moleculeImplicitHydrogens(
+  document: MoleculeDocument,
+  orders = moleculeDisplayBondOrders(document),
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  try {
+    const molecule = toChemistry({
+      ...document,
+      bonds: document.bonds.map((bond) => ({
+        ...bond,
+        order: (orders.get(bond.id) ?? bond.order) as 1 | 2 | 3,
+        aromatic: false,
+      })),
+    });
+    document.atoms.forEach((_atom, i) =>
+      molecule.setAtomMapNo(i, i + 1, false),
+    );
+    molecule.ensureHelperArrays(Molecule.cHelperRings);
+    for (let i = 0; i < molecule.getAllAtoms(); i++) {
+      const atom = document.atoms[molecule.getAtomMapNo(i) - 1];
+      if (atom) counts.set(atom.id, molecule.getImplicitHydrogens(i));
+    }
+  } catch {
+    /* An incomplete drawing remains editable even with invalid valence. */
+  }
+  return counts;
+}
+
+/** Localized aromatic orders for a conventional alternating-bond depiction. */
+export function moleculeDisplayBondOrders(
+  document: MoleculeDocument,
+): Map<string, number> {
+  const orders = new Map(document.bonds.map((b) => [b.id, b.order as number]));
+  try {
+    const lines = exportMoleculeMolfile(document).split("\n");
+    document.bonds.forEach((bond, i) =>
+      orders.set(
+        bond.id,
+        Number(lines[4 + document.atoms.length + i].slice(6, 9)),
+      ),
+    );
+  } catch {
+    /* Keep incomplete structures visible while they are being edited. */
+  }
+  return orders;
 }
 
 /** Compatibility name used by structure prediction and project integrations. */
