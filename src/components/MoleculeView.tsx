@@ -3,7 +3,10 @@ import {
   moleculeBounds,
   moleculeImplicitHydrogens,
   moleculeDisplayBondOrders,
+  exportMoleculeMolfile,
 } from "../features/molecule";
+import { moleculeNumberPositions } from "../features/moleculeLabels";
+import { stereoCenters } from "../prediction/stereochemistry";
 import type { MoleculeDocument } from "../features/molecule";
 import "./MoleculeEditor.css";
 
@@ -13,6 +16,7 @@ export interface MoleculeViewProps {
   highlightedAtomIds?: string[];
   onSelectAtom?: (atomId: string, additive?: boolean) => void;
   showAtomNumbers?: boolean;
+  showStereoCenters?: boolean;
   className?: string;
   style?: CSSProperties;
 }
@@ -32,6 +36,7 @@ export function MoleculeGlyphs({
   highlightedAtomIds = [],
   onSelectAtom,
   showAtomNumbers = true,
+  showStereoCenters = false,
 }: Omit<MoleculeViewProps, "className" | "style">) {
   const orders = useMemo(
     () =>
@@ -47,6 +52,26 @@ export function MoleculeGlyphs({
         : new Map<string, number>(),
     [molecule, orders],
   );
+  const numbers = useMemo(
+    () =>
+      molecule && showAtomNumbers
+        ? moleculeNumberPositions(molecule, hydrogens)
+        : new Map<string, { x: number; y: number }>(),
+    [molecule, hydrogens, showAtomNumbers],
+  );
+  const stereo = useMemo(() => {
+    if (!showStereoCenters || !molecule?.atoms.length) return new Map();
+    try {
+      return new Map(
+        stereoCenters(exportMoleculeMolfile(molecule)).map((c) => [
+          molecule.atoms[c.atomIndex].id,
+          c,
+        ]),
+      );
+    } catch {
+      return new Map();
+    } // Incomplete structures are normal while drawing.
+  }, [molecule, showStereoCenters]);
   if (!molecule) return null;
   const selected = new Set(selectedAtomIds);
   const highlighted = new Set(highlightedAtomIds);
@@ -237,6 +262,18 @@ export function MoleculeGlyphs({
               cy={atom.y}
               r={13}
             />
+            {stereo.has(atom.id) && (
+              <g
+                className={`molecule-stereocenter ${stereo.get(atom.id).defined ? "is-defined" : "is-undefined"}`}
+                data-testid="molecule-stereocenter"
+              >
+                <title>{`${atom.element}${atom.index}: ${stereo.get(atom.id).label} stereocenter${stereo.get(atom.id).defined ? "" : "; CASCADE uses a 50/50 mixture"}`}</title>
+                <circle cx={atom.x} cy={atom.y} r={12} />
+                <text x={atom.x - 15} y={atom.y - 14}>
+                  *
+                </text>
+              </g>
+            )}
             {selected.has(atom.id) && (
               <circle
                 className="molecule-atom-selection"
@@ -299,8 +336,8 @@ export function MoleculeGlyphs({
             {showAtomNumbers && (
               <text
                 className="molecule-atom-number"
-                x={atom.x + (label ? 0 : 10)}
-                y={atom.y + (label ? 21 : 16)}
+                x={numbers.get(atom.id)?.x}
+                y={numbers.get(atom.id)?.y}
               >
                 {atom.index}
               </text>
@@ -317,10 +354,11 @@ export function MoleculeView({
   highlightedAtomIds,
   onSelectAtom,
   showAtomNumbers = true,
+  showStereoCenters = false,
   className = "",
   style,
 }: MoleculeViewProps) {
-  const bounds = moleculeBounds(molecule, 32);
+  const bounds = moleculeBounds(molecule, 48);
   return (
     <div className={`molecule-view ${className}`} style={style}>
       {molecule?.atoms.length ? (
@@ -335,6 +373,7 @@ export function MoleculeView({
             highlightedAtomIds={highlightedAtomIds}
             onSelectAtom={onSelectAtom}
             showAtomNumbers={showAtomNumbers}
+            showStereoCenters={showStereoCenters}
           />
         </svg>
       ) : (

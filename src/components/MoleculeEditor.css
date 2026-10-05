@@ -581,6 +581,35 @@
   paint-order: stroke;
   stroke: #fbfcfd;
   stroke-width: 2;
+  dominant-baseline: central;
+  pointer-events: none;
+}
+.molecule-stereocenter circle {
+  fill: #f8bb321a;
+  stroke: #cf941d;
+  stroke-width: 1.3;
+  stroke-dasharray: 3 2;
+}
+.molecule-stereocenter text {
+  font-size: 16px;
+  font-weight: 600;
+  fill: #bc820d;
+}
+.molecule-stereocenter.is-defined circle {
+  fill: #209b8b14;
+  stroke: #209b8b;
+  stroke-dasharray: none;
+}
+.molecule-stereocenter.is-defined text {
+  fill: #209b8b;
+}
+.molecule-stereocenter {
+  pointer-events: none;
+}
+.molecule-stereo-legend {
+  font-size: 10px;
+  color: #ad831e;
+  white-space: nowrap;
 }
 .molecule-charge,
 .molecule-isotope {

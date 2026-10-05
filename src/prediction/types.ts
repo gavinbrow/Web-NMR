@@ -55,6 +55,12 @@ export interface PredictionResult {
     geometryMethod: string;
     lineage: string;
   };
+  /** Components are predicted separately, then spectra (not shifts/J) are mixed. */
+  stereoMixture?: {
+    undefinedAtomIndices: number[];
+    sampled: boolean;
+    components: { weight: number; result: PredictionResult }[];
+  };
 }
 export interface PredictedTwoDCorrelation {
   id: string;
@@ -156,7 +162,11 @@ export interface PredictedSpinSystem {
   display: {
     mode: "none" | "first-order" | "spin-system";
     frequencyMHz: number;
-    clusters: { siteIds: string[]; lines: { ppm: number; weight: number }[] }[];
+    clusters: {
+      siteIds: string[];
+      lines: { ppm: number; weight: number }[];
+      method?: "exact" | "first-order" | "unsplit";
+    }[];
     warnings: string[];
   };
 }

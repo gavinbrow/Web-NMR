@@ -88,7 +88,7 @@ describe("learned per-proton spin display", () => {
     ]);
     expect(r.couplings).toHaveLength(1);
   });
-  it("does not silently approximate an oversized coupled system", () => {
+  it("automatically renders a larger system in first order and labels the approximation", () => {
     const s = ab();
     s.sites = Array.from({ length: 11 }, (_, i) => ({
       ...s.sites[0],
@@ -103,11 +103,51 @@ describe("learned per-proton spin display", () => {
       siteIdB: `H:${i + 1}`,
       jHz: 7,
     }));
-    expect(() => renderLearnedSpinSystem(s, "spin-system", 400)).toThrow(
-      /11 protons/,
-    );
+    const automatic = renderLearnedSpinSystem(s, "spin-system", 400);
+    expect(automatic.display.clusters).toHaveLength(11);
+    expect(
+      automatic.display.clusters.every((c) => c.method === "first-order"),
+    ).toBe(true);
+    expect(
+      automatic.display.warnings.some((w) => /11-proton.*first-order/.test(w)),
+    ).toBe(true);
+    expect(automatic.couplings).toEqual(s.couplings);
+    expect(
+      automatic.display.clusters
+        .flatMap((c) => c.lines)
+        .reduce((n, l) => n + l.weight, 0),
+    ).toBeCloseTo(11, 10);
     expect(
       renderLearnedSpinSystem(s, "first-order", 400).display.clusters,
     ).toHaveLength(11);
+  });
+  it("bounds dense learned patterns without losing proton area or removing J values", () => {
+    const s = ab();
+    s.sites = Array.from({ length: 15 }, (_, i) => ({
+      ...s.sites[0],
+      id: `H:${i}`,
+      explicitAtomIndex: i,
+      shiftPpm: i / 10,
+      equivalenceKey: `H${i}`,
+    }));
+    s.couplings = s.sites.flatMap((a, i) =>
+      s.sites
+        .slice(i + 1)
+        .map((b, j) => ({
+          ...s.couplings[0],
+          siteIdA: a.id,
+          siteIdB: b.id,
+          jHz: 0.51 + j * 0.2311,
+        })),
+    );
+    const r = renderLearnedSpinSystem(s, "spin-system", 400);
+    expect(r.display.clusters).toHaveLength(15);
+    expect(r.couplings).toHaveLength(105);
+    expect(r.display.clusters.every((c) => c.lines.length <= 1024)).toBe(true);
+    expect(
+      r.display.clusters
+        .flatMap((c) => c.lines)
+        .reduce((n, l) => n + l.weight, 0),
+    ).toBeCloseTo(15, 10);
   });
 });

@@ -12,6 +12,7 @@ import { buildCouplingFeatures } from "./couplings/features";
 import { predictLearnedCouplings } from "./couplings/runtime";
 import type { LearnedCouplingPrediction } from "./couplings/types";
 import { renderLearnedSpinSystem } from "./learnedSpin";
+import { enumerateStereoMixture } from "./stereochemistry";
 
 export function cascadeResult(
   input: PredictionInput,
@@ -216,6 +217,40 @@ export async function runCascadePrediction(
     throw Error(
       "CASCADE requires a molecule drawing or imported SMILES structure.",
     );
+  const mixture = enumerateStereoMixture(input.molfile);
+  if (mixture.variants.length > 1) {
+    const components: NonNullable<
+      PredictionResult["stereoMixture"]
+    >["components"] = [];
+    for (const [i, variant] of mixture.variants.entries()) {
+      if (options.signal?.aborted)
+        throw new DOMException("Prediction canceled.", "AbortError");
+      const result = await runCascadePrediction(
+        { ...input, molfile: variant.molfile },
+        {
+          ...options,
+          onProgress: (p) =>
+            options.onProgress?.({
+              ...p,
+              message: `Stereoisomer ${i + 1}/${mixture.variants.length} · ${p.message}`,
+            }),
+        },
+      );
+      components.push({ weight: variant.weight, result });
+    }
+    const summary = `${mixture.atomIndices.length} undefined stereocenter${mixture.atomIndices.length === 1 ? "" : "s"}: 50/50 at each center. ${components.length} ${mixture.sampled ? "balanced sampled" : "equally weighted"} configurations; conformers are Boltzmann-weighted only within each configuration. Spectra are mixed without averaging stereoisomer shifts or coupling constants.`;
+    return {
+      ...components[0].result,
+      stereoMixture: {
+        undefinedAtomIndices: mixture.atomIndices,
+        sampled: mixture.sampled,
+        components,
+      },
+      warnings: [
+        ...new Set([summary, ...components.flatMap((c) => c.result.warnings)]),
+      ],
+    };
+  }
   const progress = (
     stage: import("./types").PredictionProgress["stage"],
     message: string,

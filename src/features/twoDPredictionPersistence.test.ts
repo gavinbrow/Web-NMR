@@ -79,6 +79,73 @@ function fixture(experiment: "HSQC" | "COSY" = "HSQC") {
 }
 
 describe("2D prediction persistence and reports", () => {
+  it("pairs stereoisomer H/C predictions rather than making cross-isomer HSQC peaks", async () => {
+    const { setup, result } = fixture();
+    const make = (r: PredictionResult, offset: number): PredictionResult => {
+      const copy = { ...structuredClone(r), engine: "cascade" as const };
+      delete copy.twoD;
+      copy.shifts.forEach((s) => {
+        s.shiftPpm += offset;
+        s.radius = 0;
+      });
+      return copy;
+    };
+    const h1 = make(result, 0),
+      h2 = make(result, 0.3),
+      c1 = make(result.twoD!.carbonResult!, 0),
+      c2 = make(result.twoD!.carbonResult!, 5);
+    const mix = (
+      a: PredictionResult,
+      b: PredictionResult,
+    ): PredictionResult => ({
+      ...a,
+      stereoMixture: {
+        undefinedAtomIndices: [1],
+        sampled: false,
+        components: [
+          { weight: 0.5, result: a },
+          { weight: 0.5, result: b },
+        ],
+      },
+    });
+    const assembled = assembleTwoDCorrelations(
+      { ...setup, nucleus: "1H", experiment: "HSQC" },
+      mix(h1, h2),
+      setup.molecule!,
+      mix(c1, c2),
+    );
+    expect(assembled.twoD!.correlations.map((c) => [c.xPpm, c.yPpm])).toEqual([
+      [1.2, 17],
+      [3.6, 58],
+      [1.5, 22],
+      [3.9, 63],
+    ]);
+    expect(assembled.twoD!.correlations.map((c) => c.weight)).toEqual([
+      1.5, 1, 1.5, 1,
+    ]);
+    expect(validPredictionResult(assembled)).toBe(true);
+    const spectrum = predictedTwoDSpectrum(
+      assembled,
+      { ...setup, engine: "cascade" },
+      setup.molecule!,
+    )[0];
+    spectrum.twoD = renderTwoDCorrelationMap(assembled.twoD!, {
+      size: 64,
+    }).twoD;
+    spectrum.twoDOriginal = structuredClone(spectrum.twoD);
+    const project = {
+      ...createBlankProject("Mixture HSQC"),
+      spectra: [spectrum],
+      activeId: spectrum.id,
+    };
+    const reopened = await decodeProject(await encodeProject(project));
+    expect(reopened.spectra[0].prediction?.stereoMixture?.components).toEqual(
+      spectrum.prediction?.stereoMixture?.components,
+    );
+    expect(reopened.spectra[0].prediction?.twoD?.correlations).toEqual(
+      assembled.twoD!.correlations,
+    );
+  });
   it("saves HSQC settings, carbon model, editing signs, embedded traces and atom pairs as one dataset", async () => {
     const { project, spectrum, setup } = fixture();
     const reopened = await decodeProject(await encodeProject(project));

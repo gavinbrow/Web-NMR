@@ -159,6 +159,13 @@ export default function PredictionWorkspace(p: Props) {
     if (!p.setup.molecule?.atoms.length || running) return;
     const setup = structuredClone(p.setup),
       molecule = setup.molecule!;
+    // Each prediction uses its own compact atom numbering. Keep IDs and input
+    // order intact, so existing spectra and peak assignments remain independent.
+    molecule.atoms.forEach((a, i) => {
+      a.index = i + 1;
+    });
+    molecule.nextAtomIndex = molecule.atoms.length + 1;
+    p.onChange(setup);
     setRunning(true);
     setError("");
     setProgress("Preparing molecule…");
@@ -375,6 +382,15 @@ export default function PredictionWorkspace(p: Props) {
                     </select>
                   </label>
                 )}
+                {!isTwoD &&
+                  p.setup.engine === "cascade" &&
+                  p.setup.splitting === "spin-system" && (
+                    <p className="prediction-splitting-note">
+                      Exact second-order display for systems up to 10 protons;
+                      larger systems automatically use learned-J first-order
+                      splitting.
+                    </p>
+                  )}
                 {experiment === "COSY" && (
                   <p className="prediction-splitting-note">
                     COSY cross-peaks use{" "}
@@ -707,7 +723,7 @@ export default function PredictionWorkspace(p: Props) {
                 </strong>
                 <span>
                   {p.setup.engine === "cascade"
-                    ? "ETKDGv3/MMFF94 conformers, Boltzmann averaging, and original CASCADE weights. Carbon: experimental-shift model. Proton: DFT-trained model."
+                    ? "ETKDGv3/MMFF94 conformers and original CASCADE weights. Undefined stereocenters use 50/50 populations; up to 64 balanced configurations. Conformers are Boltzmann-weighted within each configuration."
                     : "Experimental nmrshiftdb environments. Database matches determine the shifts."}
                 </span>
               </div>

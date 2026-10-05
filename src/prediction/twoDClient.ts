@@ -186,6 +186,40 @@ export function assembleTwoDCorrelations(
   molecule: MoleculeDocument,
   carbonResult?: PredictionResult,
 ): PredictionResult {
+  if (protonResult.stereoMixture) {
+    const mixture = protonResult.stereoMixture;
+    const components = mixture.components.map((c, i) => ({
+      weight: c.weight,
+      result: assembleTwoDCorrelations(
+        input,
+        c.result,
+        molecule,
+        carbonResult?.stereoMixture?.components[i]?.result ?? carbonResult,
+      ),
+    }));
+    const first = components[0].result;
+    return {
+      ...protonResult,
+      stereoMixture: { ...mixture, components },
+      warnings: [
+        ...new Set([
+          ...protonResult.warnings,
+          ...components.flatMap((c) => c.result.warnings),
+        ]),
+      ],
+      twoD: {
+        ...first.twoD!,
+        ...(carbonResult ? { carbonResult } : {}),
+        correlations: components.flatMap((c, i) =>
+          c.result.twoD!.correlations.map((p) => ({
+            ...p,
+            id: `isomer${i}:${p.id}`,
+            weight: p.weight * c.weight,
+          })),
+        ),
+      },
+    };
+  }
   const settings = settingsFor(input),
     sites = protonSites(protonResult, molecule);
   const correlations: PredictedTwoDCorrelation[] = [];

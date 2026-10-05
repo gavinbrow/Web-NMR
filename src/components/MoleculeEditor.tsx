@@ -871,11 +871,7 @@ export function MoleculeEditor({
           label="Clear canvas (undo available)"
           disabled={!doc.atoms.length}
           onClick={() => {
-            commit({
-              ...emptyMolecule(),
-              id: doc.id,
-              nextAtomIndex: doc.nextAtomIndex,
-            });
+            commit(emptyMolecule());
             select([]);
           }}
         >
@@ -1018,6 +1014,7 @@ export function MoleculeEditor({
             molecule={display}
             selectedAtomIds={selected}
             showAtomNumbers={numbers}
+            showStereoCenters
           />
           {ghost && (
             <g className="molecule-ring-ghost">
@@ -1359,6 +1356,12 @@ export function MoleculeEditor({
           Numbers
         </label>
         <span className="molecule-count">{doc.atoms.length} atoms</span>
+        <span
+          className="molecule-stereo-legend"
+          title="Stereocenters: amber means undefined (CASCADE uses 50/50); teal means defined by the drawing."
+        >
+          * Stereo
+        </span>
       </div>
       {dialog && (
         <div

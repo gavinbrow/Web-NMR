@@ -227,7 +227,7 @@ export function predictedTwoDSpectrum(
     ];
   };
   const xView = viewAround(
-    result.shifts.map((s) => s.shiftPpm),
+    prediction.correlations.map((c) => c.xPpm),
     twoD.x,
     false,
   );
@@ -235,7 +235,7 @@ export function predictedTwoDSpectrum(
     experiment === "COSY"
       ? ([...xView] as [number, number])
       : viewAround(
-          prediction.carbonResult!.shifts.map((s) => s.shiftPpm),
+          prediction.correlations.map((c) => c.yPpm),
           twoD.y,
           true,
         );

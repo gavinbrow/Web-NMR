@@ -3,7 +3,7 @@ import { aromaticInputBonds } from "../prediction/aromatic-input";
 
 export interface MoleculeAtom {
   id: string;
-  /** Permanent assignment number: editing, deletion, and cleaning never renumber atoms. */
+  /** Stable within this structure; a new/cleared structure starts at one. */
   index: number;
   element: string;
   x: number;
@@ -68,7 +68,7 @@ export function addMoleculeAtom(
 ): { document: MoleculeDocument; atom: MoleculeAtom } {
   const atom: MoleculeAtom = {
     id: newId("atom"),
-    index: document.nextAtomIndex,
+    index: document.atoms.length ? document.nextAtomIndex : 1,
     element,
     x,
     y,
@@ -78,7 +78,7 @@ export function addMoleculeAtom(
     document: moleculeChanged({
       ...document,
       atoms: [...document.atoms, atom],
-      nextAtomIndex: document.nextAtomIndex + 1,
+      nextAtomIndex: atom.index + 1,
     }),
     atom,
   };
@@ -122,6 +122,9 @@ export function removeMoleculeAtoms(
   return moleculeChanged({
     ...document,
     atoms: document.atoms.filter((a) => !removed.has(a.id)),
+    nextAtomIndex: document.atoms.every((a) => removed.has(a.id))
+      ? 1
+      : document.nextAtomIndex,
     bonds: document.bonds.filter(
       (b) => !removed.has(b.from) && !removed.has(b.to),
     ),

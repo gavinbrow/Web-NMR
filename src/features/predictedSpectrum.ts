@@ -6,6 +6,15 @@ import type { PredictionResult } from "../prediction/types";
 import { firstOrderLines, splitPredictionSignals } from "./predictionSplitting";
 import { renderPredictionLines } from "./predictionLines";
 import { integrate } from "../core/numerics";
+import { stereoMixtureSpectrum } from "./stereoMixtureSpectrum";
+
+function firstOrderKind(partners: { count: number; jHz: number }[]) {
+  try {
+    return firstOrderLines(partners).kind;
+  } catch {
+    return "m";
+  } // Dense learned patterns are already bounded by the spin renderer.
+}
 
 /** Database shifts and first-order J estimates have separate, persisted provenance. */
 export function predictedSpectrum(
@@ -14,6 +23,8 @@ export function predictedSpectrum(
   molecule: MoleculeDocument,
   colorIndex = 0,
 ): Spectrum {
+  if (result.stereoMixture)
+    return stereoMixtureSpectrum(result, setup, molecule, colorIndex);
   const shifts = result.shifts.filter((s) => Number.isFinite(s.shiftPpm));
   if (!shifts.length)
     throw new Error(
@@ -148,7 +159,7 @@ export function predictedSpectrum(
             ? "s"
             : mode === "spin-system"
               ? "m"
-              : firstOrderLines(
+              : firstOrderKind(
                   learned.couplings.flatMap((c) => {
                     const representative = sites[0];
                     const otherId =
@@ -169,7 +180,7 @@ export function predictedSpectrum(
                       ? []
                       : [{ count: 1, jHz: Math.abs(c.jHz) }];
                   }),
-                ).kind,
+                ),
         couplingsHz,
         lines: span
           ? [
@@ -180,10 +191,9 @@ export function predictedSpectrum(
       });
     }
   }
-  // Exact transitions belong collectively to a connected spin system. Partition
-  // them by nearest chemical shift only to define useful analysis windows; this
-  // is not an atom-specific assignment. Areas are actual summed transition
-  // strengths, so strong-coupling intensity transfer can yield fractional areas.
+  // Exact transitions are collective. Use appreciable transitions to locate
+  // windows, while reporting the chemical group's actual proton count.
+  // Tiny combination transitions must not stretch an integral across the plot.
   const analysisGroups = groups.map((g) => ({
     ...g,
     nucleusCount: g.weight,
@@ -202,7 +212,10 @@ export function predictedSpectrum(
       ].filter((i) => i >= 0);
       if (!candidates.length)
         throw Error("Missing chemical group for predicted spin transitions.");
+      const cutoff =
+        cluster.lines.reduce((n, l) => Math.max(n, l.weight), 0) * 1e-4;
       for (const line of cluster.lines) {
+        if (line.weight < cutoff) continue;
         const nearest = candidates.reduce(
           (best, i) =>
             Math.abs(line.ppm - groups[i].shift) <
@@ -220,12 +233,12 @@ export function predictedSpectrum(
     }
     analysisGroups.forEach((g, i) => {
       const actual = [...assigned[i]].sort((a, b) => b[0] - a[0]);
-      g.lines = actual.map(([ppm, weight]) => ({
-        offsetHz: (ppm - g.shift) * setup.frequencyMHz,
-        weight,
-      }));
-      if (mode === "spin-system")
-        g.weight = actual.reduce((total, [, weight]) => total + weight, 0);
+      g.lines = actual.length
+        ? actual.map(([ppm, weight]) => ({
+            offsetHz: (ppm - g.shift) * setup.frequencyMHz,
+            weight,
+          }))
+        : [{ offsetHz: 0, weight: 1 }];
     });
   }
   const nonemptyAnalysisGroups = analysisGroups.filter((g) => g.lines.length);
@@ -386,7 +399,7 @@ export function predictedSpectrum(
         : "CDK environment prediction",
     metadata: {
       title,
-      comments: `Predicted ${result.engine === "cascade" ? `with CASCADE · ${result.cascade?.conformerCount ?? 0} 3D conformers` : "from nmrshiftdb environments"} · ${renderedLineWidthHz.toFixed(2)} Hz linewidth\n${carbon ? "Proton-decoupled carbon signals." : learned && mode !== "none" ? (mode === "spin-system" ? "Exact isotropic spin simulation · learned signed J couplings · second-order effects included." : "First-order display · learned J couplings.") : mode === "first-order" ? "First-order splitting · editable typical J estimates; not calculated couplings." : "Unsplit predicted signals."}\n${learned && mode === "spin-system" ? "Automatic integrals use simulated proton-equivalent transition areas, partitioned by nearest chemical shift; strong coupling can give fractional values." : `Automatic integrals show modeled ${carbon ? "carbon" : "proton"} counts.`} Overlapped regions are combined.`,
+      comments: `Predicted ${result.engine === "cascade" ? `with CASCADE · ${result.cascade?.conformerCount ?? 0} 3D conformers` : "from nmrshiftdb environments"} · ${renderedLineWidthHz.toFixed(2)} Hz linewidth\n${carbon ? "Proton-decoupled carbon signals." : learned && mode !== "none" ? (mode === "spin-system" ? (learned.display.clusters.some((c) => c.method === "first-order") ? "Learned J · exact simulation for small systems; first-order display for larger systems." : "Exact isotropic spin simulation · learned signed J couplings · second-order effects included.") : "First-order display · learned J couplings.") : mode === "first-order" ? "First-order splitting · editable typical J estimates; not calculated couplings." : "Unsplit predicted signals."}\nAutomatic integrals show modeled ${carbon ? "carbon" : "proton"} counts. Overlapped regions are combined; raw simulated areas are retained separately.`,
       predictionEngine: result.engine,
       predictionDataset: result.dataset,
       predictionWarnings: [...new Set([...result.warnings, ...warnings])].join(

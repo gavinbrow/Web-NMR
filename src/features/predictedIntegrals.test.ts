@@ -173,6 +173,9 @@ describe("automatic predicted integral counts", () => {
       ),
     ).toBeCloseTo(2, 10);
     expect(
+      fine.integrals.every((i) => Number.isInteger(i.predicted!.nucleusCount)),
+    ).toBe(true);
+    expect(
       fine.integrals.reduce((total, integral) => total + integral.area, 0),
     ).toBeGreaterThan(1.9);
     expect(s.peaks[1].height).toBeGreaterThan(s.peaks[0].height * 5);
@@ -202,5 +205,56 @@ describe("automatic predicted integral counts", () => {
     const invalid = structuredClone(s.prediction)!;
     invalid.spinSystem!.couplings[0].siteIdA = "missing";
     expect(validPredictionResult(invalid)).toBe(false);
+  });
+  it("mixes isomer spectra at equal population without doubling integrals or averaging peak positions", async () => {
+    const m = importMolecule("CCO");
+    const a = {
+      ...ethanol(),
+      engine: "cascade" as const,
+      shifts: ethanol().shifts.map((s) => ({ ...s, radius: 0 })),
+    };
+    const b = structuredClone(a);
+    b.shifts[1].shiftPpm += 0.3;
+    const r: PredictionResult = {
+      ...a,
+      stereoMixture: {
+        undefinedAtomIndices: [1],
+        sampled: false,
+        components: [
+          { weight: 0.5, result: a },
+          { weight: 0.5, result: b },
+        ],
+      },
+    };
+    const setup = {
+      ...defaultPredictionSetup(),
+      engine: "cascade" as const,
+      splitting: "none" as const,
+      molecule: m,
+    };
+    const s = predictedSpectrum(r, setup, m);
+    const values = s.integrals.map((i) => displayedIntegralValue(s, i));
+    expect(values.sort()).toEqual([1, 1, 1, 3]);
+    expect(values.reduce((a, b) => a + b, 0)).toBe(6);
+    expect(s.peaks.some((p) => Math.abs(p.ppm - 3.6) < 1e-6)).toBe(true);
+    expect(s.peaks.some((p) => Math.abs(p.ppm - 3.9) < 1e-6)).toBe(true);
+    expect(s.peaks.some((p) => Math.abs(p.ppm - 3.75) < 1e-6)).toBe(false);
+    expect(validPredictionResult(s.prediction)).toBe(true);
+    const project = {
+      ...createBlankProject("Mixture"),
+      spectra: [s],
+      activeId: s.id,
+      prediction: setup,
+    };
+    const reopened = await decodeProject(await encodeProject(project));
+    expect(reopened.spectra[0].prediction?.stereoMixture).toEqual(
+      s.prediction?.stereoMixture,
+    );
+    expect(
+      reopened.spectra[0].integrals.reduce(
+        (n, i) => n + displayedIntegralValue(reopened.spectra[0], i),
+        0,
+      ),
+    ).toBe(6);
   });
 });

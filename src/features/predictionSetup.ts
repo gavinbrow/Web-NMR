@@ -327,10 +327,42 @@ export function validPredictionResult(
         s.hoseCode.length < 10000,
     ) &&
     (r.cascade === undefined || validCascadeMetadata(r.cascade)) &&
+    (r.stereoMixture === undefined || validStereoMixture(r)) &&
     (r.spinSystem === undefined || validSpinSystem(r.spinSystem, r.shifts)) &&
     (r.twoD === undefined || validTwoDPrediction(r)) &&
     (r.splitting === undefined ||
       validPredictionSplitting(r.splitting, r.shifts))
+  );
+}
+
+function validStereoMixture(r: PredictionResult): boolean {
+  const m = r.stereoMixture!;
+  return (
+    r.engine === "cascade" &&
+    !!m &&
+    typeof m.sampled === "boolean" &&
+    Array.isArray(m.undefinedAtomIndices) &&
+    m.undefinedAtomIndices.length > 0 &&
+    m.undefinedAtomIndices.length <= 300 &&
+    new Set(m.undefinedAtomIndices).size === m.undefinedAtomIndices.length &&
+    m.undefinedAtomIndices.every(
+      (i) => Number.isInteger(i) && i >= 0 && i < 300,
+    ) &&
+    Array.isArray(m.components) &&
+    m.components.length >= 2 &&
+    m.components.length <= 64 &&
+    m.components.every(
+      (c) =>
+        c &&
+        Number.isFinite(c.weight) &&
+        c.weight > 0 &&
+        c.weight <= 1 &&
+        c.result?.stereoMixture === undefined &&
+        c.result.engine === r.engine &&
+        c.result.nucleus === r.nucleus &&
+        validPredictionResult(c.result),
+    ) &&
+    Math.abs(m.components.reduce((n, c) => n + c.weight, 0) - 1) < 1e-6
   );
 }
 
@@ -589,6 +621,8 @@ function validSpinSystem(
       !c.siteIds.length ||
       c.siteIds.length > 64 ||
       !c.siteIds.every((id) => ids.has(id) && !seen.has(id)) ||
+      (c.method !== undefined &&
+        !["exact", "first-order", "unsplit"].includes(c.method)) ||
       new Set(c.siteIds).size !== c.siteIds.length ||
       !Array.isArray(c.lines) ||
       !c.lines.length ||

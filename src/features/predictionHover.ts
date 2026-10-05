@@ -13,6 +13,22 @@ export function predictedHoverLines(spectrum: Spectrum): PredictedHoverLine[] {
   const result = savedPredictionResult(spectrum);
   const molecule = spectrum.molecule?.document;
   if (!result || !molecule || result.twoD) return [];
+  if (result.stereoMixture) {
+    const merged = new Map<number, Set<string>>();
+    for (const c of result.stereoMixture.components)
+      for (const line of predictedHoverLines({
+        ...spectrum,
+        prediction: c.result,
+      })) {
+        const key = Math.round(line.ppm * 1e8) / 1e8,
+          ids = merged.get(key) ?? new Set<string>();
+        line.atomIds.forEach((id) => ids.add(id));
+        merged.set(key, ids);
+      }
+    return [...merged]
+      .map(([ppm, ids]) => ({ ppm, atomIds: [...ids] }))
+      .sort((a, b) => a.ppm - b.ppm);
+  }
   const lines: PredictedHoverLine[] = [];
   const learned = result.spinSystem;
   if (learned) {
