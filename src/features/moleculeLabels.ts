@@ -73,3 +73,72 @@ export function moleculeNumberPositions(
   }
   return result;
 }
+
+export interface MoleculeStereoLabel {
+  id: string;
+  text: string;
+  x: number;
+  y: number;
+}
+
+/** Small CIP descriptors use separate free positions from assignment numbers. */
+export function moleculeStereoLabelPositions(
+  molecule: MoleculeDocument,
+  labels: MoleculeStereoLabel[],
+  numbers: Map<string, { x: number; y: number }>,
+  hydrogens = new Map<string, number>(),
+) {
+  const occupied: Box[] = molecule.atoms.map((a) => ({
+    x: a.x,
+    y: a.y,
+    w: a.element !== "C" ? ((hydrogens.get(a.id) ?? 0) > 0 ? 58 : 27) : 14,
+    h: a.element !== "C" ? 27 : 14,
+  }));
+  for (const atom of molecule.atoms) {
+    const position = numbers.get(atom.id);
+    if (position)
+      occupied.push({
+        ...position,
+        w: String(atom.index).length * 6 + 7,
+        h: 16,
+      });
+  }
+  const atoms = new Map(molecule.atoms.map((a) => [a.id, a]));
+  const bonds: Box[] = molecule.bonds.flatMap((b) => {
+    const a = atoms.get(b.from),
+      c = atoms.get(b.to);
+    if (!a || !c) return [];
+    return Array.from({ length: 13 }, (_, i) => ({
+      x: a.x + ((c.x - a.x) * i) / 12,
+      y: a.y + ((c.y - a.y) * i) / 12,
+      w: b.order > 1 ? 10 : 6,
+      h: b.order > 1 ? 10 : 6,
+    }));
+  });
+  const result = new Map<string, { x: number; y: number }>();
+  for (const label of labels) {
+    let best = { x: label.x, y: label.y - 23, w: 15, h: 13 },
+      score = Infinity;
+    for (const radius of [23, 29, 35, 41])
+      for (let angle = 0; angle < 16; angle++) {
+        const theta = -Math.PI / 2 + (angle * Math.PI) / 8;
+        const box = {
+          ...best,
+          x: label.x + Math.cos(theta) * radius,
+          y: label.y + Math.sin(theta) * radius,
+        };
+        const cost =
+          occupied.reduce((n, b) => n + overlap(box, b) * 100, 0) +
+          bonds.reduce((n, b) => n + overlap(box, b) * 20, 0) +
+          radius +
+          angle * 0.02;
+        if (cost < score) {
+          best = box;
+          score = cost;
+        }
+      }
+    result.set(label.id, { x: best.x, y: best.y });
+    occupied.push(best);
+  }
+  return result;
+}

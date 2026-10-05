@@ -173,6 +173,11 @@ const SpectrumMoleculeOverlay = lazy(() =>
     default: m.SpectrumMoleculeOverlay,
   })),
 );
+const StackStructures = lazy(() =>
+  import("./components/StackStructures").then((m) => ({
+    default: m.StackStructures,
+  })),
+);
 
 const SpectrumExportDialog = lazy(() =>
   import("./components/SpectrumExportDialog").then((module) => ({
@@ -557,6 +562,7 @@ export default function App() {
   const [stacks, setStacks] = useState<SpectrumStack[]>([]),
     [activeStackId, setActiveStackId] = useState<string | null>(null),
     [selectedStackId, setSelectedStackId] = useState<string | null>(null);
+  const [showStackStructures, setShowStackStructures] = useState(false);
   const [properties, setProperties] = useState(defaultProperties),
     [propertiesOpen, setPropertiesOpen] = useState(false),
     [contextMenu, setContextMenu] = useState<{
@@ -883,6 +889,13 @@ export default function App() {
         s.id === active?.id ? displayedActive! : s,
       ),
     [spectra, active?.id, displayedActive, activeStack],
+  );
+  const stackStructures = plottedSpectra.filter(
+    (s) =>
+      s.visible &&
+      !s.twoD &&
+      s.nucleus === active?.nucleus &&
+      s.molecule?.document.atoms.length,
   );
   const project = (): Project => ({
     version: 1,
@@ -4254,6 +4267,22 @@ export default function App() {
                 </strong>
               </div>
               <div className="view-options">
+                {mode !== "single" && !active?.twoD && (
+                  <button
+                    className={`icon-button ${showStackStructures ? "on" : ""}`}
+                    title={
+                      stackStructures.length
+                        ? "Compare molecular structures in this stack"
+                        : "Attach or predict molecular structures to compare them"
+                    }
+                    aria-label="Show stack structures"
+                    aria-pressed={showStackStructures}
+                    disabled={!stackStructures.length}
+                    onClick={() => setShowStackStructures((v) => !v)}
+                  >
+                    <Atom size={16} /> <span>Structures</span>
+                  </button>
+                )}
                 {activeStack && (
                   <select
                     aria-label="Active stack member"
@@ -4699,6 +4728,9 @@ export default function App() {
                       value={active.molecule}
                       selectedAtomIds={selectedAtomIds}
                       hoveredAtomIds={hoveredAtomIds}
+                      stereoMolfile={
+                        active.prediction?.stereoSelection?.molfile
+                      }
                       assigning={assigningAtoms}
                       onSelectAtom={(id, multi) => {
                         setSelectedAtomIds((ids) =>
@@ -4736,6 +4768,20 @@ export default function App() {
                     />
                   </Suspense>
                 )}
+                {mode !== "single" &&
+                  showStackStructures &&
+                  !!stackStructures.length && (
+                    <Suspense fallback={null}>
+                      <StackStructures
+                        spectra={stackStructures}
+                        activeId={active.id}
+                        onSelect={(id) =>
+                          selectSpectrum(id, false, false, !!activeStack)
+                        }
+                        onClose={() => setShowStackStructures(false)}
+                      />
+                    </Suspense>
+                  )}
               </div>
               {preview && (
                 <div className="preview-badge">

@@ -19,13 +19,17 @@ export function layoutSpectrumLabels(
   left: number,
   right: number,
   maxLanes = 4,
+  compact = false,
 ) {
   const lanes: [number, number][][] = Array.from(
     { length: maxLanes },
     () => [],
   );
   const placed: PlacedSpectrumLabel[] = [];
-  const rowHeight = Math.max(20, ...labels.map((l) => l.size + 7));
+  const rowHeight = Math.max(
+    compact ? 16 : 20,
+    ...labels.map((l) => l.size + (compact ? 4 : 7)),
+  );
   const maxWidth = Math.min(200, Math.max(20, right - left));
   for (const label of labels) {
     const maxChars = Math.max(
@@ -56,7 +60,7 @@ export function layoutSpectrumLabels(
       displayText,
       center,
       width,
-      y: label.size + 4 + lane * rowHeight,
+      y: label.size + (compact ? 2 : 4) + lane * rowHeight,
       lane,
     });
   }

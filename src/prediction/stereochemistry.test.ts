@@ -6,6 +6,8 @@ import {
   enumerateStereoMixture,
   representativeStereo,
   stereoCenters,
+  stereoDoubleBonds,
+  drawingStereochemistry,
 } from "./stereochemistry";
 import { parseEnsemble } from "./conformers/ensemble";
 import type { ConformerModule } from "./conformers/types";
@@ -22,6 +24,44 @@ beforeAll(async () => {
 }, 30000);
 const block = (smiles: string) => exportMoleculeMolfile(importMolecule(smiles));
 describe("undefined stereochemistry mixtures", () => {
+  it("uses representative labels only for unchanged, unspecified centers", () => {
+    const undefinedBlock = block("CCC(O)C"),
+      selected = representativeStereo(undefinedBlock).molfile;
+    const assumed = drawingStereochemistry(undefinedBlock, selected);
+    expect(assumed.assumedAtomIndices).toEqual([2]);
+    expect(assumed.centers[0].defined).toBe(true);
+    const drawn = block("CC[C@H](O)C");
+    expect(drawingStereochemistry(drawn, selected).centers).toEqual(
+      stereoCenters(drawn),
+    );
+    expect(drawingStereochemistry(drawn, selected).assumedAtomIndices).toEqual(
+      [],
+    );
+    const different = block("CC(O)CC");
+    expect(drawingStereochemistry(different, selected).centers).toEqual(
+      stereoCenters(different),
+    );
+    expect(
+      drawingStereochemistry(different, selected).assumedAtomIndices,
+    ).toEqual([]);
+  });
+  it("assigns absolute R/S labels and keeps undefined centers unlabelled", () => {
+    expect(stereoCenters(block("CC[C@H](O)C"))[0].label).toBe("R");
+    expect(stereoCenters(block("CC[C@@H](O)C"))[0].label).toBe("S");
+    expect(stereoCenters(block("CCC(O)C"))[0].defined).toBe(false);
+  });
+  it("labels stereogenic double bonds by CIP, excluding terminal and aromatic bonds", () => {
+    expect(stereoDoubleBonds(block("C/C=C/C"))).toEqual([
+      { atomIndices: [1, 2], label: "E" },
+    ]);
+    expect(stereoDoubleBonds(block("C/C=C\\C"))).toEqual([
+      { atomIndices: [1, 2], label: "Z" },
+    ]);
+    expect(stereoDoubleBonds(block("C=C"))).toEqual([]);
+    expect(stereoDoubleBonds(block("c1ccccc1"))).toEqual([]);
+    // Higher-priority halogens change the CIP descriptor even with the same backbone geometry.
+    expect(stereoDoubleBonds(block("C/C(Cl)=C/C"))[0].label).toBe("Z");
+  });
   it("marks a genuine undefined center but not an achiral branch", () => {
     expect(stereoCenters(block("CCC(O)C"))).toEqual([
       {

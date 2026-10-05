@@ -8,6 +8,7 @@ export function SpectrumMoleculeOverlay(p: {
   value: SpectrumMolecule;
   selectedAtomIds: string[];
   hoveredAtomIds?: string[];
+  stereoMolfile?: string;
   assigning: boolean;
   onSelectAtom: (id: string, multi?: boolean) => void;
   onChange: (value: SpectrumMolecule) => void;
@@ -118,6 +119,8 @@ export function SpectrumMoleculeOverlay(p: {
           highlightedAtomIds={p.hoveredAtomIds}
           onSelectAtom={p.onSelectAtom}
           showAtomNumbers
+          showStereoCenters
+          stereoMolfile={p.stereoMolfile}
         />
       </div>
       <div className="spectrum-molecule-assignment">

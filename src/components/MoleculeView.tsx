@@ -5,8 +5,11 @@ import {
   moleculeDisplayBondOrders,
   exportMoleculeMolfile,
 } from "../features/molecule";
-import { moleculeNumberPositions } from "../features/moleculeLabels";
-import { stereoCenters } from "../prediction/stereochemistry";
+import {
+  moleculeNumberPositions,
+  moleculeStereoLabelPositions,
+} from "../features/moleculeLabels";
+import { drawingStereochemistry } from "../prediction/stereochemistry";
 import type { MoleculeDocument } from "../features/molecule";
 import "./MoleculeEditor.css";
 
@@ -17,6 +20,7 @@ export interface MoleculeViewProps {
   onSelectAtom?: (atomId: string, additive?: boolean) => void;
   showAtomNumbers?: boolean;
   showStereoCenters?: boolean;
+  stereoMolfile?: string;
   className?: string;
   style?: CSSProperties;
 }
@@ -37,6 +41,7 @@ export function MoleculeGlyphs({
   onSelectAtom,
   showAtomNumbers = true,
   showStereoCenters = false,
+  stereoMolfile,
 }: Omit<MoleculeViewProps, "className" | "style">) {
   const orders = useMemo(
     () =>
@@ -59,19 +64,70 @@ export function MoleculeGlyphs({
         : new Map<string, { x: number; y: number }>(),
     [molecule, hydrogens, showAtomNumbers],
   );
-  const stereo = useMemo(() => {
-    if (!showStereoCenters || !molecule?.atoms.length) return new Map();
+  const stereochemistry = useMemo(() => {
+    if (!showStereoCenters || !molecule?.atoms.length)
+      return { centers: [], bonds: [], assumedAtomIndices: [] };
     try {
-      return new Map(
-        stereoCenters(exportMoleculeMolfile(molecule)).map((c) => [
-          molecule.atoms[c.atomIndex].id,
-          c,
-        ]),
+      return drawingStereochemistry(
+        exportMoleculeMolfile(molecule),
+        stereoMolfile,
       );
     } catch {
-      return new Map();
+      return { centers: [], bonds: [], assumedAtomIndices: [] };
     } // Incomplete structures are normal while drawing.
-  }, [molecule, showStereoCenters]);
+  }, [molecule, showStereoCenters, stereoMolfile]);
+  const stereo = new Map(
+    stereochemistry.centers.map((c) => [molecule?.atoms[c.atomIndex]?.id, c]),
+  );
+  const stereoLabels = useMemo(() => {
+    if (!molecule) return [];
+    return [
+      ...stereochemistry.centers
+        .filter((c) => c.defined && /^[RSrs]$/.test(c.label))
+        .flatMap((c) => {
+          const atom = molecule.atoms[c.atomIndex];
+          return atom
+            ? [
+                {
+                  id: `atom:${atom.id}`,
+                  text: c.label,
+                  x: atom.x,
+                  y: atom.y,
+                  assumed: stereochemistry.assumedAtomIndices.includes(
+                    c.atomIndex,
+                  ),
+                },
+              ]
+            : [];
+        }),
+      ...stereochemistry.bonds.flatMap((b) => {
+        const [a, c] = b.atomIndices.map((i) => molecule.atoms[i]);
+        return a && c
+          ? [
+              {
+                id: `bond:${a.id}:${c.id}`,
+                text: b.label,
+                x: (a.x + c.x) / 2,
+                y: (a.y + c.y) / 2,
+                assumed: false,
+              },
+            ]
+          : [];
+      }),
+    ];
+  }, [molecule, stereochemistry]);
+  const stereoPositions = useMemo(
+    () =>
+      molecule
+        ? moleculeStereoLabelPositions(
+            molecule,
+            stereoLabels,
+            numbers,
+            hydrogens,
+          )
+        : new Map(),
+    [molecule, stereoLabels, numbers, hydrogens],
+  );
   if (!molecule) return null;
   const selected = new Set(selectedAtomIds);
   const highlighted = new Set(highlightedAtomIds);
@@ -203,6 +259,7 @@ export function MoleculeGlyphs({
         );
       })}
       {molecule.atoms.map((atom) => {
+        const center = stereo.get(atom.id);
         const isolated = !molecule.bonds.some(
           (b) => b.from === atom.id || b.to === atom.id,
         );
@@ -262,16 +319,18 @@ export function MoleculeGlyphs({
               cy={atom.y}
               r={13}
             />
-            {stereo.has(atom.id) && (
+            {center && (
               <g
-                className={`molecule-stereocenter ${stereo.get(atom.id).defined ? "is-defined" : "is-undefined"}`}
+                className={`molecule-stereocenter ${center.defined ? "is-defined" : "is-undefined"}`}
                 data-testid="molecule-stereocenter"
               >
-                <title>{`${atom.element}${atom.index}: ${stereo.get(atom.id).label} stereocenter${stereo.get(atom.id).defined ? "" : "; CASCADE shows one representative configuration"}`}</title>
+                <title>{`${atom.element}${atom.index}: ${center.label} stereocenter${center.defined ? "" : "; CASCADE shows one representative configuration"}`}</title>
                 <circle cx={atom.x} cy={atom.y} r={12} />
-                <text x={atom.x - 15} y={atom.y - 14}>
-                  *
-                </text>
+                {!center.defined && (
+                  <text x={atom.x - 15} y={atom.y - 14}>
+                    *
+                  </text>
+                )}
               </g>
             )}
             {selected.has(atom.id) && (
@@ -345,6 +404,18 @@ export function MoleculeGlyphs({
           </g>
         );
       })}
+      {stereoLabels.map((label) => (
+        <text
+          key={label.id}
+          className="molecule-stereo-label"
+          data-testid="molecule-stereo-label"
+          x={stereoPositions.get(label.id)?.x}
+          y={stereoPositions.get(label.id)?.y}
+        >
+          <title>{`${label.text} configuration${label.assumed ? " · representative used for prediction" : ""}`}</title>
+          {label.text}
+        </text>
+      ))}
     </g>
   );
 }
@@ -355,6 +426,7 @@ export function MoleculeView({
   onSelectAtom,
   showAtomNumbers = true,
   showStereoCenters = false,
+  stereoMolfile,
   className = "",
   style,
 }: MoleculeViewProps) {
@@ -374,6 +446,7 @@ export function MoleculeView({
             onSelectAtom={onSelectAtom}
             showAtomNumbers={showAtomNumbers}
             showStereoCenters={showStereoCenters}
+            stereoMolfile={stereoMolfile}
           />
         </svg>
       ) : (

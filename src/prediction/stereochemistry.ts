@@ -6,6 +6,11 @@ export interface StereoCenter {
   label: string;
 }
 
+export interface StereoDoubleBond {
+  atomIndices: [number, number];
+  label: "E" | "Z";
+}
+
 function stereoGraph(molfile: string): Molecule {
   const mol = Molecule.fromMolfile(molfile);
   // Helper arrays may reorder explicit H. Source-order maps survive that move.
@@ -34,8 +39,81 @@ export function stereoCenters(molfile: string): StereoCenter[] {
             : "defined"
         : "undefined · representative chosen",
     });
+    if (defined && mol.isAtomParityPseudo(i))
+      centers[centers.length - 1].label = centers.at(-1)!.label.toLowerCase();
   }
   return centers.sort((a, b) => a.atomIndex - b.atomIndex);
+}
+
+/** CIP priorities, rather than bond slope alone, determine E/Z. Source atom
+ * maps also keep double-bond labels attached after explicit-H reordering. */
+export function stereoDoubleBonds(molfile: string): StereoDoubleBond[] {
+  const mol = stereoGraph(molfile);
+  const bonds: StereoDoubleBond[] = [];
+  for (let b = 0; b < mol.getAllBonds(); b++) {
+    if (mol.getBondOrder(b) !== 2 || mol.isAromaticBond(b)) continue;
+    const cip = mol.getBondCIPParity(b);
+    if (
+      ![Molecule.cBondCIPParityEorP, Molecule.cBondCIPParityZorM].includes(cip)
+    )
+      continue;
+    bonds.push({
+      atomIndices: [0, 1].map(
+        (end) => mol.getAtomMapNo(mol.getBondAtom(end as 0 | 1, b)) - 1,
+      ) as [number, number],
+      label: cip === Molecule.cBondCIPParityEorP ? "E" : "Z",
+    });
+  }
+  return bonds;
+}
+
+/** A saved prediction may supply an assumed configuration only while its
+ * indexed molecular graph still matches. User-drawn configurations win. */
+export function drawingStereochemistry(
+  molfile: string,
+  representativeMolfile?: string,
+) {
+  const centers = stereoCenters(molfile);
+  const bonds = stereoDoubleBonds(molfile);
+  const assumedAtomIndices: number[] = [];
+  if (representativeMolfile) {
+    const signature = (block: string) => {
+      const m = stereoGraph(block);
+      const atoms = Array.from({ length: m.getAllAtoms() }, (_, i) =>
+        [
+          m.getAtomMapNo(i),
+          m.getAtomicNo(i),
+          m.getAtomCharge(i),
+          m.getAtomMass(i),
+        ].join(":"),
+      ).sort();
+      const edges = Array.from(
+        { length: m.getAllBonds() },
+        (_, b) =>
+          [
+            m.getAtomMapNo(m.getBondAtom(0, b)),
+            m.getAtomMapNo(m.getBondAtom(1, b)),
+          ]
+            .sort((a, c) => a - c)
+            .join(":") + `:${m.getBondOrder(b)}:${m.isAromaticBond(b)}`,
+      ).sort();
+      return JSON.stringify([atoms, edges]);
+    };
+    if (signature(molfile) === signature(representativeMolfile)) {
+      const assumed = new Map(
+        stereoCenters(representativeMolfile).map((c) => [c.atomIndex, c]),
+      );
+      for (let i = 0; i < centers.length; i++) {
+        const c = centers[i],
+          selected = assumed.get(c.atomIndex);
+        if (!c.defined && selected?.defined) {
+          centers[i] = selected;
+          assumedAtomIndices.push(c.atomIndex);
+        }
+      }
+    }
+  }
+  return { centers, bonds, assumedAtomIndices };
 }
 
 /** Every undefined tetrahedral center gets equal R/S population. Specified

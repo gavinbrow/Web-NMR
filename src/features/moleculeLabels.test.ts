@@ -6,7 +6,10 @@ import {
   removeMoleculeAtoms,
   moleculeImplicitHydrogens,
 } from "./molecule";
-import { moleculeNumberPositions } from "./moleculeLabels";
+import {
+  moleculeNumberPositions,
+  moleculeStereoLabelPositions,
+} from "./moleculeLabels";
 describe("structure numbering and label placement", () => {
   it("restarts after clearing all atoms, including an older high counter", () => {
     const old = importMolecule("CC=CC");
@@ -49,6 +52,27 @@ describe("structure numbering and label placement", () => {
             );
           }
       }
+    }
+  });
+  it("places CIP descriptors separately from atom numbers and chemical labels", () => {
+    const m = importMolecule("C/C=C/[C@H](O)C"),
+      h = moleculeImplicitHydrogens(m);
+    const numbers = moleculeNumberPositions(m, h);
+    const labels = [
+      {
+        id: "double",
+        text: "E",
+        x: (m.atoms[1].x + m.atoms[2].x) / 2,
+        y: (m.atoms[1].y + m.atoms[2].y) / 2,
+      },
+      { id: "center", text: "R", x: m.atoms[3].x, y: m.atoms[3].y },
+    ];
+    const placed = moleculeStereoLabelPositions(m, labels, numbers, h);
+    for (const p of placed.values()) {
+      for (const q of numbers.values())
+        expect(Math.abs(p.x - q.x) > 12 || Math.abs(p.y - q.y) > 14).toBe(true);
+      for (const atom of m.atoms)
+        expect(Math.hypot(p.x - atom.x, p.y - atom.y)).toBeGreaterThan(15);
     }
   });
 });

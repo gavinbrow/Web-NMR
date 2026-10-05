@@ -1,6 +1,21 @@
 import { describe, it, expect } from "vitest";
 import { layoutSpectrumLabels } from "./spectrumLabels";
 describe("spectrum annotation band", () => {
+  it("keeps dense prediction labels in a compact two-row band without collisions", () => {
+    const labels = Array.from({ length: 8 }, (_, i) => ({
+      id: String(i),
+      x: 300 + i,
+      text: "C2 Ha",
+      size: 11,
+    }));
+    const regular = layoutSpectrumLabels(labels, 54, 900);
+    const compact = layoutSpectrumLabels(labels, 54, 900, 2, true);
+    expect(compact.height).toBe(32);
+    expect(compact.height).toBeLessThan(regular.height / 2);
+    expect(compact.placed).toHaveLength(2);
+    expect(compact.hidden).toBe(6);
+    expect(compact.placed[0].lane).not.toBe(compact.placed[1].lane);
+  });
   it("packs nearby long labels into separate lanes above the trace boundary", () => {
     const layout = layoutSpectrumLabels(
       Array.from({ length: 10 }, (_, i) => ({

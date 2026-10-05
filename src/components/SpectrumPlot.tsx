@@ -235,24 +235,31 @@ export function SpectrumPlot(p: Props) {
     annotationLabels,
     54,
     size.w - 22,
+    p.active.prediction ? 2 : 4,
+    !!p.active.prediction,
   );
   const annotationMap = new Map(
     annotationLayout.placed.map((label) => [label.id, label]),
   );
+  const treeCouplings = (couplings: number[]) =>
+    couplings.filter((j) => Math.abs(j) > 0).slice(0, 6);
   const treeHeight =
-    a.multipletJTree && labelView
-      ? Math.min(
-          64,
-          Math.max(
-            0,
-            ...p.active.multiplets.map((m) => m.couplingsHz.length * 8 + 24),
-          ),
+    a.multipletLabels && a.multipletJTree && labelView
+      ? Math.max(
+          0,
+          ...p.active.multiplets
+            .filter((m) => inLabelView(m.center))
+            .map((m) =>
+              treeCouplings(m.couplingsHz).length
+                ? treeCouplings(m.couplingsHz).length * 5 + 10
+                : 0,
+            ),
         )
       : 0;
   const pad = {
       l: 54,
       r: 22,
-      t: 18 + annotationLayout.height + treeHeight,
+      t: (p.active.prediction ? 8 : 18) + annotationLayout.height + treeHeight,
       b: 42,
     },
     pw = Math.max(40, size.w - pad.l - pad.r),
@@ -1250,19 +1257,19 @@ export function SpectrumPlot(p: Props) {
                   />
                 )}
                 {p.properties.multipletJTree &&
-                  a.couplingsHz.map((j, index) => (
+                  treeCouplings(a.couplingsHz).map((j, index) => (
                     <g key={index}>
                       {[-1, 1].map((sign) => (
                         <line
                           key={sign}
                           x1={xPixel(a.center)}
-                          y1={annotationLayout.height + 12}
+                          y1={annotationLayout.height + 4}
                           x2={xPixel(
                             a.center +
                               (sign * j) /
                                 (2 * Math.max(1, p.active.frequencyMHz)),
                           )}
-                          y2={annotationLayout.height + 24 + index * 8}
+                          y2={annotationLayout.height + 10 + index * 5}
                           stroke="#7764a1"
                           strokeWidth={p.properties.multipletWidth}
                         />
