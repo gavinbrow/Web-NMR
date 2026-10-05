@@ -1,0 +1,231 @@
+.prediction-workspace {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  padding: 12px;
+  gap: 10px;
+}
+.prediction-heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 30px;
+  font-size: 13px;
+}
+.prediction-heading > svg {
+  color: #45a4ef;
+}
+.prediction-heading > span {
+  color: #a6b0be;
+}
+.prediction-heading > small {
+  margin-left: auto;
+  color: #9ba7b4;
+  font-size: 11px;
+}
+.prediction-layout {
+  display: flex;
+  flex: 1;
+  gap: 12px;
+  min-height: 0;
+}
+.prediction-editor {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  border: 1px solid #464f5d;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.prediction-editor .molecule-editor {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.prediction-editor .molecule-topbar,
+.prediction-editor .molecule-ringbar,
+.prediction-editor .molecule-statusbar {
+  flex-shrink: 0;
+}
+.prediction-editor .molecule-editor-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.prediction-editor .molecule-canvas {
+  min-height: 0;
+}
+.prediction-editor .molecule-leftbar,
+.prediction-editor .molecule-rightbar {
+  min-height: 0;
+  overflow-y: auto;
+}
+.prediction-settings {
+  width: 300px;
+  min-width: 245px;
+  max-width: 45%;
+  overflow: auto;
+  resize: horizontal;
+  padding: 17px;
+  background: #24282f;
+  border: 1px solid #444c58;
+  border-radius: 8px;
+}
+.prediction-settings h2 {
+  font-size: 16px;
+  margin: 0 0 20px;
+}
+.prediction-settings label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 15px;
+  color: #b5bfcb;
+  font-size: 12px;
+}
+.prediction-settings input,
+.prediction-settings select {
+  width: 100%;
+  min-width: 0;
+  padding: 9px;
+  color: #e3e7ef;
+  background: #1d2127;
+  border: 1px solid #4b5361;
+  border-radius: 5px;
+}
+.prediction-field-pair {
+  display: flex;
+  gap: 10px;
+}
+.prediction-field-pair > label {
+  width: 50%;
+}
+.prediction-engine {
+  display: flex;
+  gap: 8px;
+  background: #1e2931;
+  border: 1px solid #344958;
+  border-radius: 6px;
+  padding: 11px;
+  font-size: 12px;
+  margin-bottom: 16px;
+}
+.prediction-engine > svg {
+  color: #54bb8b;
+  flex-shrink: 0;
+}
+.prediction-engine span {
+  display: block;
+  color: #a5b2bf;
+  font-size: 11px;
+  line-height: 1.5;
+  margin-top: 5px;
+}
+.prediction-run {
+  width: 100%;
+  justify-content: center;
+  margin-bottom: 10px;
+}
+.prediction-settings > .secondary {
+  width: 100%;
+  margin-top: 6px;
+  justify-content: center;
+  font-size: 12px;
+}
+.prediction-note {
+  font-size: 11px;
+  line-height: 1.6;
+  color: #9ba7b7;
+  margin: 15px 0;
+}
+.prediction-progress {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #a9cfee;
+}
+.prediction-error {
+  font-size: 12px;
+  color: #ffc0cb;
+  background: #4b2530;
+  padding: 10px;
+  border-radius: 4px;
+  line-height: 1.5;
+  margin: 8px 0;
+}
+.prediction-details {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  width: 100%;
+  font-size: 12px;
+  color: #82c7ab;
+  background: #263b33;
+  padding: 10px;
+  border: 1px solid #3a5c4c;
+  border-radius: 4px;
+}
+.prediction-details > svg:last-child {
+  margin-left: auto;
+}
+.prediction-result p {
+  font-size: 11px;
+  color: #b4bdca;
+  line-height: 1.5;
+}
+.prediction-match-table {
+  overflow: auto;
+  max-height: 240px;
+  font-size: 11px;
+  margin-top: 10px;
+}
+.prediction-match-table td,
+.prediction-match-table th {
+  padding: 7px 4px;
+  text-align: left;
+}
+.prediction-match-table table {
+  width: 100%;
+}
+.prediction-attribution {
+  display: block;
+  font-size: 11px;
+  color: #86b6dc;
+  text-decoration: underline;
+  margin-top: 18px;
+}
+@media (max-width: 1000px) {
+  .prediction-layout {
+    flex-direction: column;
+    overflow: auto;
+  }
+  .prediction-editor {
+    min-height: 570px;
+    flex: none;
+  }
+  .prediction-settings {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    resize: none;
+    overflow: visible;
+  }
+  .prediction-heading > small {
+    display: none;
+  }
+}
+@media (max-width: 650px) {
+  .prediction-editor {
+    min-height: 570px;
+  }
+  .prediction-heading > span {
+    display: none;
+  }
+  .prediction-workspace {
+    padding: 8px;
+  }
+}

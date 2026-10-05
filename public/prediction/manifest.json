@@ -1,0 +1,19 @@
+{
+  "version": "nmrshiftdb-2023-09-30-cdk-2.9-v1",
+  "solvent": "Unreported",
+  "buckets": 256,
+  "nuclei": {
+    "1H": {
+      "entries": 263347,
+      "compressedBytes": 6499092,
+      "sourceJarSha256": "529e2c89279aaafcf63347460775693d0ff5120d17dae051e31b9e55f6d1e67d",
+      "sourceCsvSha256": "35c9ef9c701005e9a91e2c27d77519fcaf53e8f124e71ae2822e9c24abecd21a"
+    },
+    "13C": {
+      "entries": 1372216,
+      "compressedBytes": 31126920,
+      "sourceJarSha256": "e3c3365fb3ffdccd79bb1c39c457c2486e6170f88eeaca5f36c09587950a5090",
+      "sourceCsvSha256": "060db9edc25efcb6e1d7b9ae7dc233d765a101572e03c2dd40b80d23b60ea257"
+    }
+  }
+}

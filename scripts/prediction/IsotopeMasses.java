@@ -1,0 +1,2 @@
+import org.openscience.cdk.config.Isotopes;
+public class IsotopeMasses { public static void main(String[]args)throws Exception {var iso=Isotopes.getInstance();System.out.print("{");boolean first=true;for(int z=1;z<=118;z++){var atom=iso.getMajorIsotope(z);if(atom==null)continue;if(!first)System.out.print(",");first=false;System.out.print("\""+atom.getSymbol()+"\":"+atom.getMassNumber());}System.out.println("}");}}

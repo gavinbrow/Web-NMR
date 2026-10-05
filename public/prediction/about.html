@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Web NMR · Prediction data and source</title>
+    <style>
+      body {
+        font:
+          16px/1.65 system-ui,
+          sans-serif;
+        margin: 0;
+        background: #242830;
+        color: #dae1ec;
+      }
+      main {
+        max-width: 760px;
+        margin: auto;
+        padding: 40px 25px;
+      }
+      h1 {
+        font-size: 27px;
+      }
+      h2 {
+        font-size: 20px;
+        margin-top: 32px;
+      }
+      a {
+        color: #81bff0;
+      }
+      p,
+      li {
+        color: #b5c0d0;
+      }
+      .button {
+        display: inline-block;
+        padding: 10px 16px;
+        background: #823347;
+        border-radius: 5px;
+        color: white;
+        text-decoration: none;
+      }
+      code {
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <a href="/">← Web NMR</a>
+      <h1>Prediction data and source</h1>
+      <p>
+        Web NMR predicts proton and carbon chemical shifts using a browser port
+        of CDK 2.9's HOSE environment algorithm and the experimental lookup data
+        supplied by nmrshiftdb's standalone predictor jars. Molecular parsing
+        and layout use OpenChemLib. The drawing interface is original Web NMR
+        code and uses no Ketcher code.
+      </p>
+      <p>
+        Structures and per-molecule calculations remain in your browser. The
+        browser downloads static reference tables from this website when
+        required; there is no prediction backend. Downloaded tables can be
+        reused from browser storage.
+      </p>
+      <h2>What the estimates mean</h2>
+      <p>
+        Matching tries six surrounding spheres down to one, preserving the
+        reference predictor's mean, minimum, maximum and sample count. Fewer
+        matching spheres and broad ranges indicate less specific evidence.
+        Solvent, stereochemistry, conformer populations and diastereotopic
+        protons may remain unresolved. Signals are unsplit because coupling
+        constants are not predicted. Missing environments are reported and
+        omitted; negative shifts are retained.
+      </p>
+      <h2>Source and licenses</h2>
+      <p>
+        <a class="button" href="source.zip" download
+          >Download application source</a
+        >
+      </p>
+      <p>
+        The source includes the browser algorithm, original editor and
+        application, tests, and reproducible data extraction utilities.
+        Reference data is distributed as individual compressed chunks. The
+        <a href="manifest.json">data manifest</a> provides the exact source
+        hashes, counts and provenance. License and copyright notices are
+        included in the source and the
+        <a href="licenses/nmrshiftdb-AGPL-3.0.txt">nmrshiftdb license</a>,
+        <a href="licenses/cdk-LGPL-2.1.txt">CDK license</a> and
+        <a href="licenses/openchemlib-BSD-3-Clause.txt">OpenChemLib license</a>.
+      </p>
+      <ul>
+        <li>
+          <a href="https://github.com/cdk/cdk/tree/cdk-2.9"
+            >Chemistry Development Kit 2.9</a
+          >
+          · HOSECodeGenerator and CanonicalLabeler adaptation ·
+          LGPL-2.1-or-later.
+        </li>
+        <li>
+          <a href="https://sourceforge.net/p/nmrshiftdb2/wiki/PredictorJars/"
+            >nmrshiftdb standalone predictors</a
+          >
+          · original predictor lookup and experimental reference tables ·
+          included AGPL version 3 license.
+        </li>
+        <li>
+          <a href="https://github.com/cheminfo/openchemlib-js"
+            >OpenChemLib JS</a
+          >
+          · chemical structure primitives · BSD-3-Clause.
+        </li>
+      </ul>
+      <p>
+        The browser implementation is checked against committed Java reference
+        fixtures. Those checks establish parity on the tested structures, rather
+        than universal accuracy for every molecule.
+      </p>
+    </main>
+  </body>
+</html>

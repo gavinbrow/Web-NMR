@@ -7,23 +7,25 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",
     "test": "vitest run",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "prebuild": "node scripts/build-prediction-source.mjs"
   },
   "dependencies": {
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "lucide-react": "^0.468.0",
     "fflate": "^0.8.2",
-    "idb-keyval": "^6.2.2"
+    "idb-keyval": "^6.2.2",
+    "lucide-react": "^0.468.0",
+    "openchemlib": "9.22.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
   },
   "devDependencies": {
+    "@types/node": "^22.10.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
-    "@types/node": "^22.10.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "prettier": "^3.6.0",
     "typescript": "~5.9.3",
     "vite": "^7.2.0",
-    "vitest": "^4.1.11",
-    "prettier": "^3.6.0"
+    "vitest": "^4.1.11"
   }
 }

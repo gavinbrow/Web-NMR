@@ -9,6 +9,7 @@ import {
 } from "react";
 import {
   Activity,
+  Atom,
   ArrowDown,
   ArrowRight,
   ArrowUp,
@@ -154,6 +155,27 @@ import {
 import { NmrToolIcon, type NmrIconKind } from "./components/NmrToolIcon";
 import { KineticsWorkspace } from "./components/KineticsWorkspace";
 import type { KineticsMeasurementOptions } from "./features/kinetics";
+import {
+  defaultPredictionSetup,
+  attachMolecule,
+  assignAtoms,
+  type PredictionSetup,
+} from "./features/predictionSetup";
+import {
+  predictedSpectrum,
+  savedPredictionResult,
+} from "./features/predictedSpectrum";
+import type { PredictionResult } from "./prediction/types";
+import type { MoleculeDocument } from "./features/molecule";
+
+const PredictionWorkspace = lazy(
+  () => import("./components/PredictionWorkspace"),
+);
+const SpectrumMoleculeOverlay = lazy(() =>
+  import("./components/SpectrumMoleculeOverlay").then((m) => ({
+    default: m.SpectrumMoleculeOverlay,
+  })),
+);
 
 const SpectrumExportDialog = lazy(() =>
   import("./components/SpectrumExportDialog").then((module) => ({
@@ -188,6 +210,7 @@ const tabs: Tab[] = [
   "Analysis",
   "Stack",
   "Kinetics",
+  "Prediction",
   "Export",
 ];
 const toolText: Record<Tool, string> = {
@@ -517,6 +540,11 @@ function MiniTrace({
 }
 
 export default function App() {
+  const [predictionSetup, setPredictionSetup] = useState<PredictionSetup>(
+    defaultPredictionSetup,
+  );
+  const [selectedAtomIds, setSelectedAtomIds] = useState<string[]>([]),
+    [assigningAtoms, setAssigningAtoms] = useState(false);
   const initial = useMemo(() => createDemoSpectra(), []);
   const [spectra, setSpectra] = useState<Spectrum[]>(initial),
     [activeId, setActiveId] = useState(initial[0]?.id ?? ""),
@@ -853,6 +881,7 @@ export default function App() {
   );
   const project = (): Project => ({
     version: 1,
+    prediction: predictionSetup,
     originalMnova,
     kinetics: kineticsConfiguration(),
     stacks,
@@ -969,6 +998,7 @@ export default function App() {
           "Analysis",
           "Stack",
           "Kinetics",
+          "Prediction",
           "Export",
         ].includes(session.tab ?? "")
       )
@@ -1116,6 +1146,10 @@ export default function App() {
     if (id === next.activeDocumentId) setProjectName(name);
   }
   const notify = (message: string) => setToast(message);
+  useEffect(() => {
+    setSelectedAtomIds([]);
+    setAssigningAtoms(false);
+  }, [activeId, documents.activeDocumentId]);
   async function deleteRecoveryProject(id?: string) {
     if (!recovery || recoveryBusy) return;
     setRecoveryBusy(true);
@@ -1179,6 +1213,7 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [
     spectra,
+    predictionSetup,
     stacks,
     activeStackId,
     properties,
@@ -1451,6 +1486,9 @@ export default function App() {
     if (t === "peak") setTable("Peaks");
   }
   function restoreProjectState(p: Project) {
+    setPredictionSetup(p.prediction ?? defaultPredictionSetup());
+    setSelectedAtomIds([]);
+    setAssigningAtoms(false);
     setOriginalMnova(p.originalMnova);
     setExpandedStacks([]);
     restoreKinetics(p.kinetics, p);
@@ -2016,6 +2054,44 @@ export default function App() {
   }
   function point(ppm: number, value: number) {
     if (!active || busy) return;
+    if (assigningAtoms && active.molecule && selectedAtomIds.length) {
+      const snapped = snapReferencePeak(
+        active.data,
+        active.referenceOffset,
+        ppm,
+        (view[0] - view[1]) * 0.015,
+      );
+      if (!snapped) {
+        notify("Click close to a peak to assign the selected atoms.");
+        return;
+      }
+      const existing = active.peaks.find(
+        (p) => Math.abs(p.ppm - snapped.ppm) < 1e-5,
+      );
+      const peak = existing ?? {
+        id: uid(),
+        ppm: snapped.ppm,
+        height: snapped.value,
+      };
+      changeActive((s) =>
+        assignAtoms(
+          { ...s, peaks: existing ? s.peaks : [...s.peaks, peak] },
+          {
+            id: uid(),
+            atomIds: selectedAtomIds,
+            ppm: peak.ppm,
+            peakId: peak.id,
+          },
+        ),
+      );
+      setAssigningAtoms(false);
+      setTool("select");
+      setShowPeaks(true);
+      notify(
+        `Assigned ${selectedAtomIds.length} atom${selectedAtomIds.length === 1 ? "" : "s"} to ${peak.ppm.toFixed(3)} ppm`,
+      );
+      return;
+    }
     if (tool === "reference") {
       setClickedPpm(ppm);
       setTargetPpm(ppm);
@@ -2609,6 +2685,7 @@ export default function App() {
       return;
     }
     setTab(t);
+    setAssigningAtoms(false);
     if (t === "Stack") {
       setPanel("stack");
       if (activeStack) setMode("stack");
@@ -2621,6 +2698,53 @@ export default function App() {
     }
     if (t === "Home" || t === "Analysis") setPanel("overview");
     setInspectorOpen(false);
+  }
+  function editSpectrumMolecule() {
+    if (active?.molecule)
+      setPredictionSetup((p) => ({
+        ...p,
+        molecule: structuredClone(active.molecule!.document),
+      }));
+    enterTab("Prediction");
+  }
+  function placeMolecule() {
+    if (!active || !predictionSetup.molecule?.atoms.length) return;
+    changeActive((s) => attachMolecule(s, predictionSetup.molecule!));
+    setSelectedAtomIds([]);
+    setMode("single");
+    setActiveStackId(null);
+    setSelectedStackId(null);
+    setTableOpen(false);
+    enterTab("Analysis");
+    notify("Molecule placed · select atoms, then choose Assign peak");
+  }
+  function addPrediction(
+    result: PredictionResult,
+    setup: PredictionSetup,
+    molecule: MoleculeDocument,
+  ) {
+    if (spectra.length >= 200)
+      throw new Error(
+        "This project already has 200 spectra. Create a new project for more predictions.",
+      );
+    const spectrum = predictedSpectrum(result, setup, molecule, spectra.length);
+    commit([...spectra, spectrum]);
+    setActiveId(spectrum.id);
+    setSelected([spectrum.id]);
+    setActiveStackId(null);
+    setSelectedStackId(null);
+    setMode("single");
+    setView(extent(spectrum.data));
+    setPlotGain(1);
+    setComponent("real");
+    setTableOpen(false);
+    setInspectorOpen(false);
+    setIsDemo(false);
+    setTab("Analysis");
+    setShowPeaks(true);
+    notify(
+      `${setup.nucleus} prediction added · ${result.shifts.length} matched atom environments`,
+    );
   }
   async function saveProject() {
     if (busy) return;
@@ -2820,6 +2944,11 @@ export default function App() {
         void saveProject();
         return;
       }
+      if (
+        el.closest('[data-shortcuts="molecule"]') ||
+        (tab === "Prediction" && !command)
+      )
+        return;
       if (command && k === "z") {
         e.preventDefault();
         if (e.shiftKey) redo();
@@ -2833,7 +2962,10 @@ export default function App() {
       }
       if (e.key === "Escape") {
         e.preventDefault();
-        if (spectrumExportOpen) setSpectrumExportOpen(false);
+        if (assigningAtoms) {
+          setAssigningAtoms(false);
+          setTool("select");
+        } else if (spectrumExportOpen) setSpectrumExportOpen(false);
         else if (mnovaDetailsOpen) setMnovaDetailsOpen(false);
         else if (referencePosition !== null) setReferencePosition(null);
         else if (twoDReference) setTwoDReference(null);
@@ -2983,6 +3115,8 @@ export default function App() {
     kinSettingsOpen,
     kinView,
     kineticSpectra,
+    assigningAtoms,
+    selectedAtomIds,
   ]);
   const processActions = (
     <>
@@ -3506,6 +3640,45 @@ export default function App() {
                 onClick={() => void exportKinetics()}
               />
               <span className="group-label">Analysis</span>
+            </div>
+          </>
+        ) : tab === "Prediction" ? (
+          <>
+            <div className="ribbon-group">
+              <RibbonButton
+                icon={Atom}
+                label="Molecule editor"
+                active
+                onClick={() => enterTab("Prediction")}
+              />
+              <RibbonButton
+                icon={Atom}
+                label="Place molecule"
+                disabled={!active || !predictionSetup.molecule?.atoms.length}
+                onClick={placeMolecule}
+              />
+              <RibbonButton
+                icon={Eye}
+                label="Show molecule"
+                disabled={!active?.molecule}
+                onClick={() => {
+                  changeActive((s) => ({
+                    ...s,
+                    molecule: { ...s.molecule!, visible: true },
+                  }));
+                  enterTab("Analysis");
+                }}
+              />
+              <span className="group-label">Structure & assignments</span>
+            </div>
+            <div className="ribbon-group">
+              <RibbonButton
+                icon={Waves}
+                label="View spectrum"
+                disabled={!active}
+                onClick={() => enterTab("Analysis")}
+              />
+              <span className="group-label">Spectrum</span>
             </div>
           </>
         ) : tab === "Export" ? (
@@ -4085,7 +4258,7 @@ export default function App() {
               </div>
             </div>
           )}
-          {isDemo && tab !== "Kinetics" && (
+          {isDemo && tab !== "Kinetics" && tab !== "Prediction" && (
             <div className="demo-banner">
               <span>
                 <Sparkles size={14} /> Explore a synthetic reaction series. Open
@@ -4096,7 +4269,30 @@ export default function App() {
               </button>
             </div>
           )}
-          {tab === "Kinetics" ? (
+          {tab === "Prediction" ? (
+            <Suspense
+              fallback={
+                <div className="empty-workspace">
+                  <LoaderCircle className="spin" size={24} />
+                  <p>Opening molecule editor…</p>
+                </div>
+              }
+            >
+              <PredictionWorkspace
+                key={documents.activeDocumentId}
+                setup={predictionSetup}
+                onChange={setPredictionSetup}
+                onPredict={addPrediction}
+                onAttach={placeMolecule}
+                canAttach={!!active}
+                previousResult={
+                  active?.molecule?.document.id === predictionSetup.molecule?.id
+                    ? savedPredictionResult(active)
+                    : null
+                }
+              />
+            </Suspense>
+          ) : tab === "Kinetics" ? (
             <KineticsWorkspace
               targets={kinTargets}
               activeTargetId={kineticTarget.id}
@@ -4439,7 +4635,52 @@ export default function App() {
                     }}
                     onFit={full}
                     exportRef={svgExport}
+                    selectedAtomIds={selectedAtomIds}
+                    onAssignmentSelect={setSelectedAtomIds}
                   />
+                )}
+                {active.molecule?.visible && mode === "single" && (
+                  <Suspense fallback={null}>
+                    <SpectrumMoleculeOverlay
+                      key={active.id}
+                      value={active.molecule}
+                      selectedAtomIds={selectedAtomIds}
+                      assigning={assigningAtoms}
+                      onSelectAtom={(id, multi) => {
+                        setSelectedAtomIds((ids) =>
+                          multi
+                            ? ids.includes(id)
+                              ? ids.filter((v) => v !== id)
+                              : [...ids, id]
+                            : ids.length === 1 && ids[0] === id
+                              ? []
+                              : [id],
+                        );
+                        setAssigningAtoms(false);
+                      }}
+                      onChange={(molecule) =>
+                        changeActive((s) => ({
+                          ...s,
+                          molecule,
+                          revision: s.revision + 1,
+                        }))
+                      }
+                      onEdit={editSpectrumMolecule}
+                      onAssign={() => {
+                        if (active.twoD) {
+                          notify(
+                            "Atom-to-peak assignments currently use a 1D spectrum.",
+                          );
+                          return;
+                        }
+                        setAssigningAtoms((v) => !v);
+                        setTool("peak");
+                        notify(
+                          "Click a peak to assign the selected atoms · Esc cancels",
+                        );
+                      }}
+                    />
+                  </Suspense>
                 )}
               </div>
               {preview && (
@@ -4474,7 +4715,7 @@ export default function App() {
               </button>
             </div>
           )}
-          {tab !== "Kinetics" && (
+          {tab !== "Kinetics" && tab !== "Prediction" && (
             <div
               className={`results-panel ${!tableOpen ? "collapsed" : ""}`}
               style={
@@ -4844,7 +5085,7 @@ export default function App() {
             </div>
           )}
         </main>
-        {tab !== "Kinetics" && (
+        {tab !== "Kinetics" && tab !== "Prediction" && (
           <div className="tool-rail">
             {(
               [
@@ -4915,7 +5156,7 @@ export default function App() {
             </button>
           </div>
         )}
-        {inspectorOpen && (
+        {inspectorOpen && tab !== "Prediction" && (
           <aside
             className="inspector"
             style={{ width: inspectorWidth, minWidth: inspectorWidth }}

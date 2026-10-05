@@ -1,0 +1,549 @@
+.molecule-editor {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #48505b;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #2b3038;
+  color: #eef0f3;
+  font-size: 12px;
+  box-shadow: 0 6px 24px #14192318;
+}
+.molecule-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 48px;
+  padding: 0 12px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  border-bottom: 1px solid #444c57;
+}
+.molecule-editor-brand {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.molecule-editor-brand strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.molecule-brand-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 27px;
+  height: 27px;
+  border: 1px solid #ad7481;
+  border-radius: 7px;
+  color: #edb4c0;
+}
+.molecule-brand-note {
+  font-size: 10px;
+  color: #9ca6b3;
+  margin-left: 3px;
+}
+.molecule-toolbar-group {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.molecule-editor button.molecule-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 33px;
+  height: 33px;
+  padding: 0;
+  border-radius: 5px;
+  color: #dae0e7;
+  border: 1px solid transparent;
+}
+.molecule-editor button.molecule-tool:not(:disabled):hover,
+.molecule-editor button.molecule-text-tool:not(:disabled):hover {
+  background: #444d59;
+}
+.molecule-editor button.molecule-tool.active {
+  border-color: #c18998;
+  background: #754052;
+  color: #fff;
+}
+.molecule-editor button:focus-visible {
+  outline: 2px solid #dfa4b2;
+  outline-offset: -2px;
+}
+.molecule-editor button.molecule-text-tool {
+  color: #e1e5eb;
+  gap: 5px;
+  padding: 7px 8px;
+  border-radius: 5px;
+  font-size: 11px;
+}
+.molecule-separator {
+  display: block;
+  width: 1px;
+  height: 22px;
+  background: #46505c;
+  margin: 0 5px;
+}
+.molecule-editor-body {
+  display: grid;
+  grid-template-columns: 45px minmax(0, 1fr) 45px;
+  min-height: 455px;
+}
+.molecule-leftbar,
+.molecule-rightbar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 8px 5px;
+}
+.molecule-leftbar {
+  border-right: 1px solid #48505b;
+}
+.molecule-rightbar {
+  border-left: 1px solid #48505b;
+}
+.molecule-leftbar .molecule-separator {
+  width: 24px;
+  height: 1px;
+  margin: 5px 0;
+}
+.molecule-toolbar-caption {
+  font-size: 8px;
+  letter-spacing: 1px;
+  font-weight: 600;
+  color: #9eabb8;
+  line-height: 20px;
+}
+.molecule-rightbar .molecule-tool {
+  font-size: 15px;
+  font-weight: 600;
+}
+.molecule-rightbar .molecule-tool.active span {
+  color: #fff;
+}
+.molecule-editor .element-O {
+  color: #ed8990;
+}
+.molecule-editor .element-N {
+  color: #8fb5ee;
+}
+.molecule-editor .element-S {
+  color: #dfc577;
+}
+.molecule-editor .element-F,
+.molecule-editor .element-Cl {
+  color: #8cceac;
+}
+.molecule-editor .element-Br {
+  color: #dd9b85;
+}
+.molecule-editor .element-I {
+  color: #caa4ec;
+}
+.molecule-bond-icon {
+  font-family: Arial, sans-serif;
+  font-size: 26px;
+  line-height: 1;
+}
+.molecule-bond-icon.bond-4 {
+  font-size: 22px;
+  transform: scaleX(1.25) rotate(-20deg);
+}
+.molecule-bond-icon.bond-5 {
+  font-size: 31px;
+}
+.molecule-canvas-wrap {
+  position: relative;
+  min-width: 0;
+  background: #fcfcfb;
+  overflow: hidden;
+}
+.molecule-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 455px;
+  touch-action: none;
+  outline: none;
+}
+.molecule-canvas.tool-bond,
+.molecule-canvas.tool-ring,
+.molecule-canvas.tool-element,
+.molecule-canvas.tool-charge-plus,
+.molecule-canvas.tool-charge-minus {
+  cursor: crosshair;
+}
+.molecule-canvas.tool-pan {
+  cursor: grab;
+}
+.molecule-canvas.tool-pan:active {
+  cursor: grabbing;
+}
+.molecule-canvas.tool-erase {
+  cursor: cell;
+}
+.molecule-empty-guide {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 11px;
+  color: #9a9fa8;
+  text-align: center;
+  padding: 40px;
+}
+.molecule-empty-guide strong {
+  font-size: 18px;
+  font-weight: 500;
+  color: #747c87;
+}
+.molecule-empty-guide span {
+  max-width: 270px;
+  line-height: 1.6;
+  font-size: 12px;
+}
+.molecule-empty-guide button {
+  pointer-events: auto;
+  color: #976070;
+  padding: 7px 10px;
+  border-radius: 5px;
+  font-size: 11px;
+}
+.molecule-canvas-controls {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid #dce0e5;
+  border-radius: 7px;
+  background: #fffefbef;
+  box-shadow: 0 2px 6px #222a3310;
+  color: #67717f;
+}
+.molecule-canvas-controls span {
+  min-width: 35px;
+  font-size: 10px;
+  text-align: center;
+}
+.molecule-editor .molecule-canvas-controls button.molecule-tool {
+  color: #637080;
+  width: 27px;
+  height: 27px;
+}
+.molecule-editor
+  .molecule-canvas-controls
+  button.molecule-tool:not(:disabled):hover {
+  background: #e9edf2;
+}
+.molecule-ringbar {
+  height: 45px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 12px;
+  border-top: 1px solid #48505b;
+}
+.molecule-ringbar .molecule-toolbar-caption {
+  margin-right: 5px;
+}
+.molecule-ring-template {
+  position: relative;
+  width: 23px;
+  height: 23px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.molecule-aromatic-circle {
+  width: 10px;
+  height: 10px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  position: absolute;
+  inset: 6.5px;
+}
+.molecule-ringbar-spacer {
+  flex: 1;
+}
+.molecule-number-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: #c6ced8;
+  white-space: nowrap;
+}
+.molecule-number-toggle input {
+  margin: 0;
+  accent-color: #af6d80;
+}
+.molecule-statusbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  min-height: 29px;
+  padding: 6px 12px;
+  border-top: 1px solid #424b56;
+  color: #aeb7c4;
+  font-size: 10px;
+  line-height: 1.4;
+}
+.molecule-statusbar > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.molecule-statusbar > span:last-child {
+  white-space: nowrap;
+}
+.molecule-bond line {
+  stroke: #303944;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+}
+.molecule-bond polygon {
+  fill: #303944;
+}
+.molecule-bond .molecule-bond-selection {
+  stroke: #edd0d9;
+  stroke-width: 10;
+}
+.molecule-element {
+  font-family: Arial, sans-serif;
+  font-size: 17px;
+  font-weight: 500;
+  text-anchor: middle;
+  dominant-baseline: central;
+  paint-order: stroke;
+  stroke: #fcfcfb;
+  stroke-width: 5px;
+  stroke-linejoin: round;
+}
+.molecule-atom-hit {
+  fill: transparent;
+  stroke: none;
+}
+.molecule-atom[role="button"] {
+  cursor: pointer;
+}
+.molecule-atom[role="button"]:hover .molecule-atom-hit,
+.molecule-atom[role="button"]:focus-visible .molecule-atom-hit {
+  fill: #962b4014;
+  stroke: #ba8192;
+  stroke-width: 1;
+}
+.molecule-atom:focus-visible {
+  outline: none;
+}
+.molecule-atom-selection {
+  fill: #f5dce6a8;
+  stroke: #ae637b;
+  stroke-width: 1.25;
+}
+.molecule-atom-number {
+  font-family: Inter, sans-serif;
+  font-size: 10px;
+  font-weight: 500;
+  text-anchor: middle;
+  fill: #8f7680;
+  paint-order: stroke;
+  stroke: #fcfcfb;
+  stroke-width: 2px;
+}
+.molecule-charge,
+.molecule-isotope {
+  font-size: 10px;
+  fill: #303944;
+  paint-order: stroke;
+  stroke: #fcfcfb;
+  stroke-width: 2px;
+}
+.molecule-drawing-preview {
+  stroke: #aa667e;
+  stroke-width: 2;
+  stroke-dasharray: 5 3;
+  pointer-events: none;
+}
+.molecule-selection-box {
+  fill: #aa667e15;
+  stroke: #aa667e;
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  pointer-events: none;
+}
+.molecule-view {
+  min-height: 100px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fcfcfb;
+  border-radius: 7px;
+}
+.molecule-view svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 100px;
+  max-height: 350px;
+}
+.molecule-view-empty {
+  color: #8c96a1;
+  font-size: 12px;
+}
+.molecule-dialog-backdrop {
+  position: absolute;
+  z-index: 5;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: #151b25a8;
+  backdrop-filter: blur(3px);
+}
+.molecule-dialog {
+  width: 480px;
+  max-width: 100%;
+  border-radius: 10px;
+  border: 1px solid #566171;
+  background: #2c333e;
+  padding: 18px;
+  box-shadow: 0 10px 30px #10172255;
+}
+.molecule-dialog-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.molecule-dialog-heading strong {
+  font-size: 15px;
+  font-weight: 550;
+}
+.molecule-dialog p {
+  color: #b6c0ce;
+  font-size: 11px;
+  line-height: 1.6;
+  margin: 9px 0 15px;
+}
+.molecule-format-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  color: #cfd6e0;
+  font-size: 11px;
+}
+.molecule-format-label select {
+  background: #394353;
+  border-color: #596574;
+  color: #fff;
+  width: 175px;
+  padding: 6px 9px;
+}
+.molecule-dialog textarea {
+  display: block;
+  resize: vertical;
+  width: 100%;
+  min-height: 150px;
+  max-height: 230px;
+  border: 1px solid #596574;
+  border-radius: 6px;
+  padding: 12px;
+  color: #263342;
+  background: #f8fafc;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  margin: 12px 0;
+}
+.molecule-dialog textarea:focus {
+  outline: 2px solid #b87c91;
+  outline-offset: 1px;
+}
+.molecule-dialog-error {
+  color: #f3a6b2;
+  font-size: 11px;
+  margin: 8px 0;
+  line-height: 1.5;
+}
+.molecule-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.molecule-dialog-actions button {
+  padding: 8px 11px;
+  background: #414c5e;
+  color: #eaf0f8;
+  border-radius: 5px;
+  font-size: 11px;
+}
+.molecule-dialog-actions button:not(:disabled):hover {
+  background: #536076;
+}
+.molecule-dialog-actions button.primary {
+  background: #9a4a64;
+}
+.molecule-dialog-actions button.primary:not(:disabled):hover {
+  background: #b05b76;
+}
+.molecule-editor.compact .molecule-editor-body {
+  min-height: 360px;
+}
+.molecule-editor.compact .molecule-canvas {
+  min-height: 360px;
+}
+@media (max-width: 640px) {
+  .molecule-brand-note {
+    display: none;
+  }
+  .molecule-editor-brand strong {
+    font-size: 11px;
+  }
+  .molecule-topbar {
+    gap: 4px;
+    padding: 0 7px;
+  }
+  .molecule-editor button.molecule-text-tool {
+    font-size: 0;
+    gap: 0;
+    padding: 7px;
+  }
+  .molecule-toolbar-group {
+    gap: 1px;
+  }
+  .molecule-ringbar {
+    gap: 1px;
+    padding: 0 5px;
+  }
+  .molecule-ringbar .molecule-toolbar-caption {
+    margin-right: 1px;
+  }
+  .molecule-ringbar .molecule-tool {
+    width: 28px;
+  }
+  .molecule-number-toggle {
+    font-size: 9px;
+  }
+  .molecule-statusbar > span:last-child {
+    display: none;
+  }
+}

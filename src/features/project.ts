@@ -9,6 +9,11 @@ import type {
 } from "../model";
 import { validProperties } from "./appearance";
 import { validTwoDView } from "./twoDTraces";
+import {
+  validPredictionSetup,
+  validSpectrumMolecule,
+  validPredictionResult,
+} from "./predictionSetup";
 
 const MAX_BYTES = 256 * 1024 * 1024;
 const MAX_POINTS = 8_388_608;
@@ -232,6 +237,10 @@ export function validateProject(value: unknown): asserts value is Project {
     "Invalid view limits.",
   );
   const ids = new Set<string>();
+  assert(
+    p.prediction === undefined || validPredictionSetup(p.prediction),
+    "Invalid prediction setup.",
+  );
   if (p.originalMnova) {
     assert(
       text(p.originalMnova.name) &&
@@ -256,6 +265,14 @@ export function validateProject(value: unknown): asserts value is Project {
       "Invalid or duplicate spectrum identity.",
     );
     ids.add(s.id);
+    assert(
+      s.molecule === undefined || validSpectrumMolecule(s.molecule),
+      "Invalid spectrum molecule or atom assignments.",
+    );
+    assert(
+      s.prediction === undefined || validPredictionResult(s.prediction),
+      "Invalid saved prediction result.",
+    );
     assert(
       s.properties === undefined || validProperties(s.properties),
       "Invalid spectrum appearance properties.",

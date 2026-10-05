@@ -6,6 +6,8 @@ import { spectrumText } from "../features/spectrumText";
 import { snapReferencePeak } from "../features/reference";
 
 interface Props {
+  selectedAtomIds?: string[];
+  onAssignmentSelect?: (ids: string[]) => void;
   stackComments?: boolean;
   regions?: {
     id?: string;
@@ -1024,6 +1026,85 @@ export function SpectrumPlot(p: Props) {
           </g>
         )}
         <g clipPath="url(#plot-clip)">
+          {!isFid &&
+            p.mode === "single" &&
+            p.active.molecule?.visible &&
+            p.active.molecule.assignments.map((assignment) => {
+              if (
+                assignment.ppm > v[0] ||
+                assignment.ppm < v[1] ||
+                !activeTrace
+              )
+                return null;
+              const selected = assignment.atomIds.some((id) =>
+                p.selectedAtomIds?.includes(id),
+              );
+              const peak = p.active.peaks.find(
+                (pk) => pk.id === assignment.peakId,
+              );
+              const y = Math.max(
+                pad.t + 62,
+                activeTrace.base - (peak?.height ?? 0) * activeTrace.scale - 10,
+              );
+              const labels = assignment.atomIds
+                .map((id) => {
+                  const atom = p.active.molecule!.document.atoms.find(
+                    (a) => a.id === id,
+                  );
+                  return atom ? atom.element + atom.index : "";
+                })
+                .filter(Boolean)
+                .join(", ");
+              return (
+                <g
+                  key={assignment.id}
+                  data-testid="atom-assignment"
+                  data-atom-ids={assignment.atomIds.join(",")}
+                  data-ppm={assignment.ppm}
+                  style={{ cursor: "pointer" }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    p.onAssignmentSelect?.(assignment.atomIds);
+                  }}
+                >
+                  <title>
+                    {labels} · {assignment.ppm.toFixed(3)} ppm
+                  </title>
+                  <rect
+                    x={
+                      xPixel(assignment.ppm) - Math.max(12, labels.length * 3.4)
+                    }
+                    y={y - 15}
+                    width={Math.max(24, labels.length * 6.8)}
+                    height={20}
+                    rx={3}
+                    fill={selected ? "#dceeff" : "#ffffffdd"}
+                  />
+                  <text
+                    x={xPixel(assignment.ppm)}
+                    y={y}
+                    textAnchor="middle"
+                    fontSize={11}
+                    fontWeight={selected ? 700 : 500}
+                    fill={selected ? "#086cbb" : "#437ea9"}
+                  >
+                    {labels}
+                  </text>
+                  {selected && (
+                    <line
+                      x1={xPixel(assignment.ppm)}
+                      x2={xPixel(assignment.ppm)}
+                      y1={y + 5}
+                      y2={activeTrace.base}
+                      stroke="#1689e9"
+                      strokeWidth={1}
+                      strokeDasharray="3 3"
+                    />
+                  )}
+                </g>
+              );
+            })}
           {p.showIntegrals &&
             a.integrals &&
             !isFid &&

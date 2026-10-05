@@ -33,6 +33,17 @@ export function shiftSpectrum(s: Spectrum, delta: number): Spectrum {
         : {}),
     },
     peaks: s.peaks.map((p) => ({ ...p, ppm: p.ppm + delta })),
+    ...(s.molecule
+      ? {
+          molecule: {
+            ...s.molecule,
+            assignments: s.molecule.assignments.map((a) => ({
+              ...a,
+              ppm: a.ppm + delta,
+            })),
+          },
+        }
+      : {}),
     integrals: s.integrals.map((i) => ({
       ...i,
       from: i.from + delta,

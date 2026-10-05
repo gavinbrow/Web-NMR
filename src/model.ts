@@ -1,6 +1,18 @@
 import type { SpectrumProperties } from "./features/appearance";
+import type {
+  PredictionSetup,
+  SpectrumMolecule,
+} from "./features/predictionSetup";
+import type { PredictionResult } from "./prediction/types";
 export type Tab =
-  "File" | "Home" | "Processing" | "Analysis" | "Stack" | "Kinetics" | "Export";
+  | "File"
+  | "Home"
+  | "Processing"
+  | "Analysis"
+  | "Stack"
+  | "Kinetics"
+  | "Prediction"
+  | "Export";
 export type Tool =
   | "select"
   | "zoom"
@@ -186,6 +198,8 @@ export interface TwoDView {
   leftSpectrumId?: string;
 }
 export interface Spectrum {
+  prediction?: PredictionResult;
+  molecule?: SpectrumMolecule;
   /** Saved individual document frame, in referenced ppm. */
   savedView?: [number, number];
   twoD?: TwoDSpectrum;
@@ -266,6 +280,7 @@ export interface KineticsConfiguration {
   };
 }
 export interface Project {
+  prediction?: PredictionSetup;
   /** Original document is retained losslessly alongside the editable browser data. */
   originalMnova?: { name: string; bytes: Uint8Array; importNotes: string[] };
   kinetics?: KineticsConfiguration;

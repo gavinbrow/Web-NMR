@@ -1,0 +1,23 @@
+Browser-local chemical shift prediction
+
+CDK 2.9 HOSECodeGenerator / CanonicalLabeler TypeScript adaptations:
+Copyright (C) 1997-2007 Christoph Steinbeck; 2008 Egon Willighagen;
+2014 Mark B Vine; 2001-2007 Oliver Horlacher.
+GNU Lesser General Public License, version 2.1 or later.
+Source: https://github.com/cdk/cdk/tree/cdk-2.9
+
+Lookup data and standalone prediction lookup algorithm:
+nmrshiftdb2 standalone predictorh.jar / predictorc.jar, 2023-09-30 snapshot.
+Copyright (C) 2010-2015 Stefan Kuhn and NMRShiftDB project contributors.
+AGPL version 3 license supplied in the source jars is included verbatim.
+Documentation: https://sourceforge.net/p/nmrshiftdb2/wiki/PredictorJars/
+Exact source and dataset SHA-256 hashes: manifest.json.
+
+Molecule parsing, valence/hydrogen and aromaticity perception:
+OpenChemLib 9.22.1, BSD-3-Clause, https://github.com/Actelion/openchemlib-js
+
+Corresponding TypeScript implementation, fixtures and rebuilding utilities:
+app/src/prediction/ and app/scripts/prediction/ in the distributed source.
+All molecule calculations are performed locally; only static same-origin
+reference chunks are loaded. This model uses Unreported solvent environments,
+does not infer couplings, and can leave atoms unmatched.
