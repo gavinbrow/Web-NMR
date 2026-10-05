@@ -59,7 +59,11 @@ const lookup: PredictionResult = {
 describe("prediction spectrum and atom assignments", () => {
   it("keeps negative shifts, field-dependent linewidth and proton area ratios", () => {
     const molecule = importMolecule("CCO"),
-      setup = { ...defaultPredictionSetup(), molecule };
+      setup = {
+        ...defaultPredictionSetup(),
+        molecule,
+        splitting: "none" as const,
+      };
     const spectrum = predictedSpectrum(lookup, setup, molecule);
     expect(spectrum.peaks.map((p) => p.ppm)).toEqual([1.2, 3.6, -0.2]);
     expect(integrate(spectrum.data, 0, 1.1, 1.3)).toBeCloseTo(3, 1);
@@ -101,7 +105,7 @@ describe("prediction spectrum and atom assignments", () => {
     const reopened = await decodeProject(await encodeProject(project));
     expect(reopened.prediction).toEqual(setup);
     expect(reopened.spectra[0].molecule).toEqual(spectrum.molecule);
-    expect(reopened.spectra[0].prediction).toEqual(lookup);
+    expect(reopened.spectra[0].prediction).toEqual(spectrum.prediction);
     expect(reopened.spectra[0].data.real).toEqual(spectrum.data.real);
     const malformed = structuredClone(project);
     malformed.spectra[0].molecule!.assignments[0].atomIds = ["missing"];

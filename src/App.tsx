@@ -161,10 +161,7 @@ import {
   assignAtoms,
   type PredictionSetup,
 } from "./features/predictionSetup";
-import {
-  predictedSpectrum,
-  savedPredictionResult,
-} from "./features/predictedSpectrum";
+import { savedPredictionResult } from "./features/predictionResult";
 import type { PredictionResult } from "./prediction/types";
 import type { MoleculeDocument } from "./features/molecule";
 
@@ -2718,7 +2715,7 @@ export default function App() {
     enterTab("Analysis");
     notify("Molecule placed · select atoms, then choose Assign peak");
   }
-  function addPrediction(
+  async function addPrediction(
     result: PredictionResult,
     setup: PredictionSetup,
     molecule: MoleculeDocument,
@@ -2727,6 +2724,7 @@ export default function App() {
       throw new Error(
         "This project already has 200 spectra. Create a new project for more predictions.",
       );
+    const { predictedSpectrum } = await import("./features/predictedSpectrum");
     const spectrum = predictedSpectrum(result, setup, molecule, spectra.length);
     commit([...spectra, spectrum]);
     setActiveId(spectrum.id);
@@ -2745,6 +2743,7 @@ export default function App() {
     notify(
       `${setup.nucleus} prediction added · ${result.shifts.length} matched atom environments`,
     );
+    return spectrum.prediction!;
   }
   async function saveProject() {
     if (busy) return;

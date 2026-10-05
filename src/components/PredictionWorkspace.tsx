@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   ChevronDown,
@@ -7,6 +7,9 @@ import {
   X,
   Settings2,
   ShieldCheck,
+  Waves,
+  Plus,
+  RotateCcw,
 } from "lucide-react";
 import { MoleculeEditor } from "./MoleculeEditor";
 import {
@@ -17,6 +20,7 @@ import {
 import type { PredictionSetup } from "../features/predictionSetup";
 import type { PredictionResult } from "../prediction/types";
 import { predictMolecule } from "../prediction/client";
+import { estimateProtonCouplings } from "../features/predictionSplitting";
 import "./PredictionWorkspace.css";
 
 interface Props {
@@ -26,7 +30,7 @@ interface Props {
     result: PredictionResult,
     setup: PredictionSetup,
     molecule: MoleculeDocument,
-  ) => void;
+  ) => Promise<PredictionResult>;
   onAttach: () => void;
   canAttach: boolean;
   previousResult?: PredictionResult | null;
@@ -70,6 +74,10 @@ export default function PredictionWorkspace(p: Props) {
       p.previousResult ?? null,
     ),
     [details, setDetails] = useState(false),
+    [couplingsOpen, setCouplingsOpen] = useState(false),
+    [manualA, setManualA] = useState(""),
+    [manualB, setManualB] = useState(""),
+    [manualJ, setManualJ] = useState(7),
     [settingsOpen, setSettingsOpen] = useState(false);
   const abort = useRef<AbortController | null>(null);
   useEffect(
@@ -81,8 +89,41 @@ export default function PredictionWorkspace(p: Props) {
   const settings = (patch: Partial<PredictionSetup>) => {
     setResult(null);
     setError("");
-    p.onChange({ ...p.setup, ...patch });
+    const next = { ...p.setup, ...patch };
+    if (patch.molecule) {
+      const ids = new Set(patch.molecule.atoms.map((a) => a.id));
+      next.couplingOverrides = (next.couplingOverrides ?? []).filter(
+        (c) => ids.has(c.atomIdA) && ids.has(c.atomIdB),
+      );
+    }
+    p.onChange(next);
   };
+  const couplingModel = useMemo(() => {
+    if (!p.setup.molecule?.atoms.length || p.setup.nucleus !== "1H")
+      return null;
+    try {
+      return estimateProtonCouplings(
+        p.setup.molecule,
+        p.setup.couplingOverrides,
+      );
+    } catch {
+      return null;
+    }
+  }, [p.setup.molecule, p.setup.nucleus, p.setup.couplingOverrides]);
+  const setCoupling = (atomIdA: string, atomIdB: string, jHz?: number) => {
+    const overrides = (p.setup.couplingOverrides ?? []).filter(
+      (c) =>
+        !(
+          (c.atomIdA === atomIdA && c.atomIdB === atomIdB) ||
+          (c.atomIdA === atomIdB && c.atomIdB === atomIdA)
+        ),
+    );
+    if (jHz !== undefined) overrides.push({ atomIdA, atomIdB, jHz });
+    settings({ couplingOverrides: overrides });
+  };
+  const disabledCouplings = (p.setup.couplingOverrides ?? []).filter(
+    (c) => c.jHz === 0,
+  );
   async function predict() {
     if (!p.setup.molecule?.atoms.length || running) return;
     const setup = structuredClone(p.setup),
@@ -108,8 +149,7 @@ export default function PredictionWorkspace(p: Props) {
         },
       );
       if (controller.signal.aborted) return;
-      setResult(output);
-      p.onPredict(output, setup, molecule);
+      setResult(await p.onPredict(output, setup, molecule));
     } catch (e) {
       if (!controller.signal.aborted)
         setError(e instanceof Error ? e.message : String(e));
@@ -152,6 +192,32 @@ export default function PredictionWorkspace(p: Props) {
             </button>
           ))}
         </div>
+        {p.setup.nucleus === "1H" ? (
+          <button
+            className={`prediction-splitting-toggle ${p.setup.splitting === "first-order" ? "active" : ""}`}
+            disabled={running}
+            aria-pressed={p.setup.splitting === "first-order"}
+            title="Toggle approximate first-order splitting. Edit J values in Settings."
+            onClick={() =>
+              settings({
+                splitting:
+                  p.setup.splitting === "first-order" ? "none" : "first-order",
+              })
+            }
+          >
+            <Waves size={15} />
+            <span>
+              {p.setup.splitting === "first-order" ? "Splitting on" : "Unsplit"}
+            </span>
+          </button>
+        ) : (
+          <small
+            className="prediction-decoupled"
+            title="Carbon spectra are simulated with proton decoupling"
+          >
+            ¹H decoupled
+          </small>
+        )}
         <button
           className="primary prediction-header-run"
           disabled={!p.setup.molecule?.atoms.length || running}
@@ -169,7 +235,7 @@ export default function PredictionWorkspace(p: Props) {
           className={`prediction-settings-toggle ${settingsOpen ? "active" : ""}`}
           aria-label="Prediction settings"
           aria-expanded={settingsOpen}
-          title="Frequency, linewidth, spectrum title, and match details"
+          title="Splitting, J couplings, frequency, linewidth, and match details"
           onClick={() => setSettingsOpen(!settingsOpen)}
         >
           <Settings2 size={16} />
@@ -204,6 +270,226 @@ export default function PredictionWorkspace(p: Props) {
                 <X size={17} />
               </button>
             </div>
+            {p.setup.nucleus === "1H" && (
+              <div className="prediction-splitting-settings">
+                <label>
+                  Signal splitting
+                  <select
+                    aria-label="Prediction signal splitting"
+                    disabled={running}
+                    value={p.setup.splitting ?? "none"}
+                    onChange={(e) =>
+                      settings({
+                        splitting: e.target.value as "none" | "first-order",
+                      })
+                    }
+                  >
+                    <option value="first-order">
+                      Estimate first-order multiplets
+                    </option>
+                    <option value="none">Unsplit chemical shifts</option>
+                  </select>
+                </label>
+                {p.setup.splitting === "first-order" && (
+                  <>
+                    <p className="prediction-splitting-note">
+                      Typical J estimates. OH/NH exchange, unresolved CH₂
+                      protons, and second-order effects can change the real
+                      pattern.
+                    </p>
+                    <button
+                      className="prediction-coupling-heading"
+                      aria-expanded={couplingsOpen}
+                      onClick={() => setCouplingsOpen(!couplingsOpen)}
+                    >
+                      <Waves size={14} /> Edit J couplings{" "}
+                      <small>{couplingModel?.couplings.length ?? 0}</small>
+                      <ChevronDown size={13} />
+                    </button>
+                    {couplingsOpen && (
+                      <div className="prediction-couplings">
+                        {!couplingModel && (
+                          <p>Draw a valid structure to estimate couplings.</p>
+                        )}
+                        {couplingModel && !couplingModel.couplings.length && (
+                          <p>
+                            No automatic couplings between distinct carbon-bound
+                            proton groups were found.
+                          </p>
+                        )}
+                        {couplingModel?.couplings.map((c) => (
+                          <div
+                            className="prediction-coupling-row"
+                            key={`${c.atomIdA}:${c.atomIdB}`}
+                          >
+                            <span
+                              title={`${c.rule} · ${c.hydrogensA}H / ${c.hydrogensB}H`}
+                            >
+                              <strong>
+                                {c.labelA} ↔ {c.labelB}
+                              </strong>
+                              <small>
+                                {c.source === "manual"
+                                  ? "Manual J"
+                                  : c.rule.split(" · ")[0]}
+                              </small>
+                            </span>
+                            <PredictionNumber
+                              label={`J ${c.labelA}–${c.labelB} (Hz)`}
+                              value={c.jHz}
+                              min={0}
+                              max={100}
+                              disabled={running}
+                              onChange={(j) =>
+                                setCoupling(c.atomIdA, c.atomIdB, j)
+                              }
+                            />
+                            <button
+                              className="icon-button"
+                              disabled={running}
+                              title={
+                                c.source === "manual"
+                                  ? "Restore the estimate for this pair"
+                                  : "Remove this coupling"
+                              }
+                              aria-label={
+                                c.source === "manual"
+                                  ? `Restore J for ${c.labelA}–${c.labelB}`
+                                  : `Remove J for ${c.labelA}–${c.labelB}`
+                              }
+                              onClick={() =>
+                                setCoupling(
+                                  c.atomIdA,
+                                  c.atomIdB,
+                                  c.source === "manual" ? undefined : 0,
+                                )
+                              }
+                            >
+                              {c.source === "manual" ? (
+                                <RotateCcw size={13} />
+                              ) : (
+                                <X size={13} />
+                              )}
+                            </button>
+                          </div>
+                        ))}
+                        {disabledCouplings.map((c) => (
+                          <div
+                            className="prediction-coupling-removed"
+                            key={`${c.atomIdA}:${c.atomIdB}`}
+                          >
+                            <span>
+                              {
+                                couplingModel?.sites.find(
+                                  (s) => s.atomId === c.atomIdA,
+                                )?.label
+                              }{" "}
+                              ↔{" "}
+                              {
+                                couplingModel?.sites.find(
+                                  (s) => s.atomId === c.atomIdB,
+                                )?.label
+                              }{" "}
+                              · removed
+                            </span>
+                            <button
+                              disabled={running}
+                              onClick={() => setCoupling(c.atomIdA, c.atomIdB)}
+                              title="Restore automatic estimate"
+                            >
+                              Restore
+                            </button>
+                          </div>
+                        ))}
+                        {couplingModel && couplingModel.sites.length > 1 && (
+                          <div className="prediction-manual-coupling">
+                            <strong>Add a manual coupling</strong>
+                            <div className="prediction-manual-sites">
+                              <select
+                                aria-label="Manual coupling first atom"
+                                disabled={running}
+                                value={manualA}
+                                onChange={(e) => setManualA(e.target.value)}
+                              >
+                                <option value="">Atom A</option>
+                                {couplingModel.sites.map((s) => (
+                                  <option key={s.atomId} value={s.atomId}>
+                                    {s.label} · {s.hydrogens}H
+                                  </option>
+                                ))}
+                              </select>
+                              <select
+                                aria-label="Manual coupling second atom"
+                                disabled={running}
+                                value={manualB}
+                                onChange={(e) => setManualB(e.target.value)}
+                              >
+                                <option value="">Atom B</option>
+                                {couplingModel.sites
+                                  .filter((s) => s.atomId !== manualA)
+                                  .map((s) => (
+                                    <option key={s.atomId} value={s.atomId}>
+                                      {s.label} · {s.hydrogens}H
+                                    </option>
+                                  ))}
+                              </select>
+                            </div>
+                            <div className="prediction-manual-j">
+                              <PredictionNumber
+                                label="Manual J (Hz)"
+                                value={manualJ}
+                                min={0.1}
+                                max={100}
+                                disabled={running}
+                                onChange={setManualJ}
+                              />
+                              <button
+                                disabled={
+                                  running ||
+                                  !manualA ||
+                                  !manualB ||
+                                  manualA === manualB
+                                }
+                                onClick={() => {
+                                  const a = couplingModel.sites.find(
+                                      (s) => s.atomId === manualA,
+                                    ),
+                                    b = couplingModel.sites.find(
+                                      (s) => s.atomId === manualB,
+                                    );
+                                  if (!a || !b) return;
+                                  if (
+                                    a.parent === b.parent ||
+                                    a.symmetry === b.symmetry
+                                  ) {
+                                    setError(
+                                      "Equivalent or same-atom proton groups are treated as one site. Their mutual splitting is unresolved in this model.",
+                                    );
+                                    return;
+                                  }
+                                  setCoupling(manualA, manualB, manualJ);
+                                }}
+                              >
+                                <Plus size={13} /> Add
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                        {!!p.setup.couplingOverrides?.length && (
+                          <button
+                            className="prediction-reset-couplings"
+                            disabled={running}
+                            onClick={() => settings({ couplingOverrides: [] })}
+                          >
+                            <RotateCcw size={12} /> Reset all J estimates
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
             <label>
               Experiment
               <select
@@ -302,8 +588,10 @@ export default function PredictionWorkspace(p: Props) {
               Place on current spectrum
             </button>
             <p className="prediction-note">
-              Predictions create a new spectrum in the list on the left. Signals
-              are unsplit; this engine does not calculate coupling constants.
+              Predictions create a new spectrum in the list on the left.
+              Chemical shifts come from reference matches; optional proton
+              splitting uses editable J estimates. Carbon signals are
+              proton-decoupled.
             </p>
             <a
               className="prediction-attribution"
@@ -326,6 +614,9 @@ export default function PredictionWorkspace(p: Props) {
                 {result.warnings.map((w, i) => (
                   <p key={i}>{w}</p>
                 ))}
+                {result.splitting?.warnings.map((w, i) => (
+                  <p key={`splitting-${i}`}>{w}</p>
+                ))}
                 {details && (
                   <div className="prediction-match-table">
                     <table>
@@ -333,6 +624,7 @@ export default function PredictionWorkspace(p: Props) {
                         <tr>
                           <th>Atom</th>
                           <th>δ / ppm</th>
+                          <th>Pattern</th>
                           <th>Radius</th>
                           <th>Matches</th>
                           <th>Range / ppm</th>
@@ -346,6 +638,11 @@ export default function PredictionWorkspace(p: Props) {
                               {p.setup.molecule?.atoms[s.atomIndex]?.index}
                             </td>
                             <td>{s.shiftPpm.toFixed(3)}</td>
+                            <td title="Approximate first-order pattern">
+                              {result.splitting?.signals.find(
+                                (signal) => signal.atomIndex === s.atomIndex,
+                              )?.kind ?? "s"}
+                            </td>
                             <td>{s.radius}</td>
                             <td>{s.sampleCount}</td>
                             <td>

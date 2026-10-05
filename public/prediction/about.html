@@ -68,9 +68,29 @@
         reference predictor's mean, minimum, maximum and sample count. Fewer
         matching spheres and broad ranges indicate less specific evidence.
         Solvent, stereochemistry, conformer populations and diastereotopic
-        protons may remain unresolved. Signals are unsplit because coupling
-        constants are not predicted. Missing environments are reported and
+        protons may remain unresolved. Optional proton splitting uses original
+        first-order simulation with typical, editable J magnitudes (7 Hz vicinal,
+        8/2/0.5 Hz aromatic ortho/meta/para, and a 12 Hz alkene placeholder).
+        These are estimates, not calculated or database-predicted couplings.
+        OH/NH/SH exchange, geminal/diastereotopic splitting, other long-range and
+        heteronuclear couplings, and second-order effects remain unresolved.
+        Carbon signals are simulated with proton decoupling. Missing environments are reported and
         omitted; negative shifts are retained.
+      </p>
+      <p>
+        Equal J values produce normalized Pascal intensities; different J values
+        produce product patterns. Field strength changes ppm spacing while J stays
+        in Hz. Complex Lorentzian line shapes preserve proton area weights.
+        The display uses a bounded, adaptive grid and reports any additional
+        broadening needed to resolve an excessively narrow requested linewidth.
+        Project files preserve the splitting setup, manual J overrides, patterns,
+        and prediction provenance.
+      </p>
+      <p>
+        The typical coupling hierarchy follows established proton NMR teaching
+        data, including the
+        <a href="https://organicchemistrydata.org/hansreich/resources/nmr/">Hans Reich NMR collection</a>.
+        It is not a fitted coupling model and does not replace measured J values.
       </p>
       <h2>Source and licenses</h2>
       <p>

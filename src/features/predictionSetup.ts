@@ -8,6 +8,15 @@ export interface PredictionSetup {
   frequencyMHz: number;
   lineWidthHz: number;
   title: string;
+  /** Absent in older project files: retain their original unsplit display. */
+  splitting?: "none" | "first-order";
+  couplingOverrides?: CouplingOverride[];
+}
+export interface CouplingOverride {
+  atomIdA: string;
+  atomIdB: string;
+  /** Zero explicitly removes this coupling. Values are first-order magnitudes. */
+  jHz: number;
 }
 export interface AtomAssignment {
   id: string;
@@ -29,6 +38,8 @@ export function defaultPredictionSetup(): PredictionSetup {
     frequencyMHz: 400,
     lineWidthHz: 1,
     title: "",
+    splitting: "first-order",
+    couplingOverrides: [],
   };
 }
 export function attachMolecule(
@@ -161,7 +172,23 @@ export function validPredictionSetup(value: unknown): value is PredictionSetup {
     p.lineWidthHz >= 0.1 &&
     p.lineWidthHz <= 100 &&
     typeof p.title === "string" &&
-    p.title.length <= 500
+    p.title.length <= 500 &&
+    (p.splitting === undefined ||
+      ["none", "first-order"].includes(p.splitting)) &&
+    (p.couplingOverrides === undefined ||
+      (Array.isArray(p.couplingOverrides) &&
+        p.couplingOverrides.length <= 1000 &&
+        p.couplingOverrides.every(
+          (c) =>
+            c &&
+            [c.atomIdA, c.atomIdB].every(
+              (id) => typeof id === "string" && id.length <= 200,
+            ) &&
+            c.atomIdA !== c.atomIdB &&
+            Number.isFinite(c.jHz) &&
+            c.jHz >= 0 &&
+            c.jHz <= 100,
+        )))
   );
 }
 export function validSpectrumMolecule(
@@ -241,6 +268,65 @@ export function validPredictionResult(
         s.radius <= 6 &&
         typeof s.hoseCode === "string" &&
         s.hoseCode.length < 10000,
+    ) &&
+    (r.splitting === undefined ||
+      validPredictionSplitting(r.splitting, r.shifts))
+  );
+}
+
+function validPredictionSplitting(
+  value: PredictionResult["splitting"],
+  shifts: PredictionResult["shifts"],
+): boolean {
+  if (
+    !value ||
+    !["none", "first-order"].includes(value.mode) ||
+    !Number.isFinite(value.renderedLineWidthHz) ||
+    value.renderedLineWidthHz <= 0 ||
+    value.renderedLineWidthHz > 1000 ||
+    !Array.isArray(value.warnings) ||
+    value.warnings.length > 100 ||
+    !value.warnings.every((w) => typeof w === "string" && w.length < 10000) ||
+    !Array.isArray(value.couplings) ||
+    value.couplings.length > 1000 ||
+    !Array.isArray(value.signals) ||
+    value.signals.length > 1500
+  )
+    return false;
+  const atoms = new Set(shifts.map((s) => s.atomIndex));
+  return (
+    value.couplings.every(
+      (c) =>
+        c &&
+        atoms.has(c.atomIndexA) &&
+        atoms.has(c.atomIndexB) &&
+        c.atomIndexA !== c.atomIndexB &&
+        [c.hydrogensA, c.hydrogensB].every(
+          (n) => Number.isInteger(n) && n >= 1 && n <= 8,
+        ) &&
+        Number.isFinite(c.jHz) &&
+        c.jHz > 0 &&
+        c.jHz <= 100 &&
+        ["estimate", "manual"].includes(c.source) &&
+        typeof c.rule === "string" &&
+        c.rule.length < 1000,
+    ) &&
+    value.signals.every(
+      (s) =>
+        s &&
+        atoms.has(s.atomIndex) &&
+        Number.isFinite(s.shiftPpm) &&
+        Number.isInteger(s.hydrogenCount) &&
+        s.hydrogenCount > 0 &&
+        s.hydrogenCount <= 8 &&
+        typeof s.kind === "string" &&
+        s.kind.length < 100 &&
+        Number.isInteger(s.lineCount) &&
+        s.lineCount >= 1 &&
+        s.lineCount <= 1024 &&
+        Array.isArray(s.couplingsHz) &&
+        s.couplingsHz.length <= 100 &&
+        s.couplingsHz.every((j) => Number.isFinite(j) && j > 0 && j <= 100),
     )
   );
 }
