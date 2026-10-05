@@ -1358,7 +1358,7 @@ export function MoleculeEditor({
         <span className="molecule-count">{doc.atoms.length} atoms</span>
         <span
           className="molecule-stereo-legend"
-          title="Stereocenters: amber means undefined (CASCADE uses 50/50); teal means defined by the drawing."
+          title="Stereocenters: amber means undefined (CASCADE chooses one representative configuration); teal means defined by the drawing."
         >
           * Stereo
         </span>

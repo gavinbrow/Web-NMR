@@ -7,6 +7,8 @@ import { firstOrderLines, splitPredictionSignals } from "./predictionSplitting";
 import { renderPredictionLines } from "./predictionLines";
 import { integrate } from "../core/numerics";
 import { stereoMixtureSpectrum } from "./stereoMixtureSpectrum";
+import { representativeStereoComment } from "../prediction/stereoSelection";
+import { predictedLineSiteIds } from "./predictionHover";
 
 function firstOrderKind(partners: { count: number; jHz: number }[]) {
   try {
@@ -254,19 +256,21 @@ export function predictedSpectrum(
     { ppm: number; weight: number; atoms: string[] }
   >();
   const renderedLines = learned
-    ? learned.display.clusters.flatMap((cluster) => {
-        const atoms = [
-          ...new Set(
-            cluster.siteIds.map(
-              (id) =>
-                molecule.atoms[
-                  learned.sites.find((site) => site.id === id)!.atomIndex
-                ].id,
+    ? learned.display.clusters.flatMap((cluster) =>
+        cluster.lines.map((l) => ({
+          ...l,
+          atoms: [
+            ...new Set(
+              predictedLineSiteIds(learned, cluster, l).map(
+                (id) =>
+                  molecule.atoms[
+                    learned.sites.find((site) => site.id === id)!.atomIndex
+                  ].id,
+              ),
             ),
-          ),
-        ];
-        return cluster.lines.map((l) => ({ ...l, atoms }));
-      })
+          ],
+        })),
+      )
     : groups.flatMap((g) =>
         g.lines.map((l) => ({
           ppm: g.shift + l.offsetHz / setup.frequencyMHz,
@@ -399,7 +403,7 @@ export function predictedSpectrum(
         : "CDK environment prediction",
     metadata: {
       title,
-      comments: `Predicted ${result.engine === "cascade" ? `with CASCADE · ${result.cascade?.conformerCount ?? 0} 3D conformers` : "from nmrshiftdb environments"} · ${renderedLineWidthHz.toFixed(2)} Hz linewidth\n${carbon ? "Proton-decoupled carbon signals." : learned && mode !== "none" ? (mode === "spin-system" ? (learned.display.clusters.some((c) => c.method === "first-order") ? "Learned J · exact simulation for small systems; first-order display for larger systems." : "Exact isotropic spin simulation · learned signed J couplings · second-order effects included.") : "First-order display · learned J couplings.") : mode === "first-order" ? "First-order splitting · editable typical J estimates; not calculated couplings." : "Unsplit predicted signals."}\nAutomatic integrals show modeled ${carbon ? "carbon" : "proton"} counts. Overlapped regions are combined; raw simulated areas are retained separately.`,
+      comments: `Predicted ${result.engine === "cascade" ? `with CASCADE · ${result.cascade?.conformerCount ?? 0} 3D conformers` : "from nmrshiftdb environments"} · ${renderedLineWidthHz.toFixed(2)} Hz linewidth\n${carbon ? "Proton-decoupled carbon signals." : learned && mode !== "none" ? (mode === "spin-system" ? (learned.display.clusters.some((c) => c.method === "first-order") ? "Learned J · exact simulation for small systems; first-order display for larger systems." : "Exact isotropic spin simulation · learned signed J couplings · second-order effects included.") : "First-order display · learned J couplings.") : mode === "first-order" ? "First-order splitting · editable typical J estimates; not calculated couplings." : "Unsplit predicted signals."}\nAutomatic integrals show modeled ${carbon ? "carbon" : "proton"} counts. Overlapped regions are combined; raw simulated areas are retained separately.${representativeStereoComment(result) ? `\n${representativeStereoComment(result)}` : ""}`,
       predictionEngine: result.engine,
       predictionDataset: result.dataset,
       predictionWarnings: [...new Set([...result.warnings, ...warnings])].join(

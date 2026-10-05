@@ -267,7 +267,7 @@ export function MoleculeGlyphs({
                 className={`molecule-stereocenter ${stereo.get(atom.id).defined ? "is-defined" : "is-undefined"}`}
                 data-testid="molecule-stereocenter"
               >
-                <title>{`${atom.element}${atom.index}: ${stereo.get(atom.id).label} stereocenter${stereo.get(atom.id).defined ? "" : "; CASCADE uses a 50/50 mixture"}`}</title>
+                <title>{`${atom.element}${atom.index}: ${stereo.get(atom.id).label} stereocenter${stereo.get(atom.id).defined ? "" : "; CASCADE shows one representative configuration"}`}</title>
                 <circle cx={atom.x} cy={atom.y} r={12} />
                 <text x={atom.x - 15} y={atom.y - 14}>
                   *

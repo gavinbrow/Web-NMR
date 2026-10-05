@@ -10,6 +10,8 @@ export interface SpinCoupling {
 export interface SpinLine {
   ppm: number;
   weight: number;
+  /** Dominant site magnetization changes, merged across coincident transitions. */
+  siteIds?: string[];
 }
 type EigenSystem = {
   values: Float64Array;
@@ -145,9 +147,21 @@ export function simulateSpinSystem(
       }
       matrix[row * dim + row] = energy;
     }
-    return diagonalize(matrix, states);
+    const block = diagonalize(matrix, states);
+    // Spin-resolved magnetization expectations in each eigenstate. Differences
+    // identify the dominant source of a transition without assigning every line
+    // to the entire connected system. This leaves total-I+ intensities intact.
+    const magnetizations = new Float64Array(dim * n);
+    for (let eigen = 0; eigen < dim; eigen++)
+      for (let row = 0; row < dim; row++) {
+        const probability = block.vectors[row * dim + eigen] ** 2;
+        for (let spin = 0; spin < n; spin++)
+          magnetizations[eigen * n + spin] +=
+            probability * (states[row] & (1 << spin) ? 0.5 : -0.5);
+      }
+    return { ...block, magnetizations };
   });
-  const lines: SpinLine[] = [];
+  const lines: (SpinLine & { contributions: number[] })[] = [];
   for (let k = 0; k < n; k++) {
     const low = blocks[k],
       high = blocks[k + 1],
@@ -170,21 +184,49 @@ export function simulateSpinSystem(
         for (let row = 0; row < dh; row++)
           amplitude += high.vectors[row * dh + h] * raised[row * dl + l];
         const strength = amplitude * amplitude;
-        if (strength > 1e-12)
+        if (strength > 1e-12) {
+          const changes = spins.map((_, spin) =>
+            Math.max(
+              0,
+              high.magnetizations[h * n + spin] -
+                low.magnetizations[l * n + spin],
+            ),
+          );
+          const changeSum = changes.reduce((sum, v) => sum + v, 0);
           lines.push({
             ppm: center + (high.values[h] - low.values[l]) / frequencyMHz,
             weight: strength,
+            contributions: changes.map((v) => (strength * v) / changeSum),
           });
+        }
       }
   }
   const sum = lines.reduce((total, line) => total + line.weight, 0),
-    merged = new Map<number, SpinLine>();
+    merged = new Map<number, SpinLine & { contributions: number[] }>();
   for (const line of lines) {
     const key = Math.round(line.ppm * frequencyMHz * 1e6) / 1e6;
     const existing = merged.get(key);
     const weight = (line.weight * n) / sum;
-    if (existing) existing.weight += weight;
-    else merged.set(key, { ppm: line.ppm, weight });
+    if (existing) {
+      existing.weight += weight;
+      line.contributions.forEach((v, i) => (existing.contributions[i] += v));
+    } else
+      merged.set(key, {
+        ppm: line.ppm,
+        weight,
+        contributions: [...line.contributions],
+      });
   }
-  return [...merged.values()].sort((a, b) => b.ppm - a.ppm);
+  return [...merged.values()]
+    .map(({ ppm, weight, contributions }) => {
+      const largest = Math.max(...contributions);
+      return {
+        ppm,
+        weight,
+        siteIds: spins.flatMap((spin, i) =>
+          contributions[i] >= largest * 0.95 ? [spin.id] : [],
+        ),
+      };
+    })
+    .sort((a, b) => b.ppm - a.ppm);
 }

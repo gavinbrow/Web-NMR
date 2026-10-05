@@ -2,7 +2,11 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
 import { Molecule } from "openchemlib";
 import { exportMoleculeMolfile, importMolecule } from "../features/molecule";
-import { enumerateStereoMixture, stereoCenters } from "./stereochemistry";
+import {
+  enumerateStereoMixture,
+  representativeStereo,
+  stereoCenters,
+} from "./stereochemistry";
 import { parseEnsemble } from "./conformers/ensemble";
 import type { ConformerModule } from "./conformers/types";
 let wasm: ConformerModule;
@@ -20,7 +24,11 @@ const block = (smiles: string) => exportMoleculeMolfile(importMolecule(smiles));
 describe("undefined stereochemistry mixtures", () => {
   it("marks a genuine undefined center but not an achiral branch", () => {
     expect(stereoCenters(block("CCC(O)C"))).toEqual([
-      { atomIndex: 2, defined: false, label: "undefined · 50/50" },
+      {
+        atomIndex: 2,
+        defined: false,
+        label: "undefined · representative chosen",
+      },
     ]);
     expect(stereoCenters(block("CC(O)C"))).toEqual([]);
     expect(stereoCenters(block("CC[C@H](O)C"))[0].defined).toBe(true);
@@ -82,5 +90,27 @@ describe("undefined stereochemistry mixtures", () => {
         doc.atoms.map((_, i) => i),
       );
     }
+  }, 30000);
+  it("selects one deterministic embeddable isomer while preserving defined stereocenters and atom mapping", () => {
+    const source = block("CC(O)C(O)CC[C@H](F)C");
+    const selected = representativeStereo(source);
+    expect(representativeStereo(source)).toEqual(selected);
+    expect(selected.atomIndices).toHaveLength(2);
+    const defined = stereoCenters(source).find((c) => c.defined)!;
+    expect(stereoCenters(selected.molfile).every((c) => c.defined)).toBe(true);
+    expect(
+      stereoCenters(selected.molfile).find(
+        (c) => c.atomIndex === defined.atomIndex,
+      )?.label,
+    ).toBe(defined.label);
+    expect(representativeStereo(selected.molfile).atomIndices).toEqual([]);
+    const doc = importMolecule(source, "molfile");
+    const e = parseEnsemble(
+      wasm.generate(selected.molfile, 3, 0xf00d, () => {}),
+    );
+    expect(e.hydrogenAlignmentWarnings).toEqual([]);
+    expect(e.originalAtomIndices.slice(0, doc.atoms.length)).toEqual(
+      doc.atoms.map((_, i) => i),
+    );
   }, 30000);
 });

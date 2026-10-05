@@ -328,10 +328,30 @@ export function validPredictionResult(
     ) &&
     (r.cascade === undefined || validCascadeMetadata(r.cascade)) &&
     (r.stereoMixture === undefined || validStereoMixture(r)) &&
+    (r.stereoSelection === undefined || validStereoSelection(r)) &&
     (r.spinSystem === undefined || validSpinSystem(r.spinSystem, r.shifts)) &&
     (r.twoD === undefined || validTwoDPrediction(r)) &&
     (r.splitting === undefined ||
       validPredictionSplitting(r.splitting, r.shifts))
+  );
+}
+
+function validStereoSelection(r: PredictionResult): boolean {
+  const s = r.stereoSelection!;
+  return (
+    r.engine === "cascade" &&
+    !r.stereoMixture &&
+    !!s &&
+    typeof s.molfile === "string" &&
+    s.molfile.length > 0 &&
+    s.molfile.length <= 200000 &&
+    Array.isArray(s.undefinedAtomIndices) &&
+    s.undefinedAtomIndices.length > 0 &&
+    s.undefinedAtomIndices.length <= 300 &&
+    new Set(s.undefinedAtomIndices).size === s.undefinedAtomIndices.length &&
+    s.undefinedAtomIndices.every(
+      (i) => Number.isInteger(i) && i >= 0 && i < 300,
+    )
   );
 }
 
@@ -632,7 +652,13 @@ function validSpinSystem(
           l &&
           Number.isFinite(l.ppm) &&
           Number.isFinite(l.weight) &&
-          l.weight > 0,
+          l.weight > 0 &&
+          (l.siteIds === undefined ||
+            (Array.isArray(l.siteIds) &&
+              l.siteIds.length > 0 &&
+              l.siteIds.length <= c.siteIds.length &&
+              new Set(l.siteIds).size === l.siteIds.length &&
+              l.siteIds.every((id) => c.siteIds.includes(id)))),
       )
     )
       return false;

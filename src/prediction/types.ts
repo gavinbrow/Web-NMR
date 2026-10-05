@@ -55,7 +55,9 @@ export interface PredictionResult {
     geometryMethod: string;
     lineage: string;
   };
-  /** Components are predicted separately, then spectra (not shifts/J) are mixed. */
+  /** Reproducible configuration chosen for otherwise unspecified stereocenters. */
+  stereoSelection?: { undefinedAtomIndices: number[]; molfile: string };
+  /** Legacy mixture results remain readable without changing saved data. */
   stereoMixture?: {
     undefinedAtomIndices: number[];
     sampled: boolean;
@@ -164,7 +166,7 @@ export interface PredictedSpinSystem {
     frequencyMHz: number;
     clusters: {
       siteIds: string[];
-      lines: { ppm: number; weight: number }[];
+      lines: { ppm: number; weight: number; siteIds?: string[] }[];
       method?: "exact" | "first-order" | "unsplit";
     }[];
     warnings: string[];

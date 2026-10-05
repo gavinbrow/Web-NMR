@@ -723,7 +723,7 @@ export default function PredictionWorkspace(p: Props) {
                 </strong>
                 <span>
                   {p.setup.engine === "cascade"
-                    ? "ETKDGv3/MMFF94 conformers and original CASCADE weights. Undefined stereocenters use 50/50 populations; up to 64 balanced configurations. Conformers are Boltzmann-weighted within each configuration."
+                    ? "ETKDGv3/MMFF94 conformers and original CASCADE weights. Undefined stereocenters use one reproducible representative stereoisomer, stated in the spectrum comments. Its conformers are Boltzmann-weighted."
                     : "Experimental nmrshiftdb environments. Database matches determine the shifts."}
                 </span>
               </div>
@@ -791,8 +791,8 @@ export default function PredictionWorkspace(p: Props) {
                     ? "Proton splitting uses learned signed J values, with exact second-order simulation available."
                     : "Proton splitting uses editable typical J estimates."}{" "}
                   Carbon signals are proton-decoupled. Automatic integrals show
-                  modeled counts or collective transition areas for exact spin
-                  systems.
+                  modeled nucleus counts, with raw simulated areas retained
+                  separately.
                 </>
               )}
             </p>

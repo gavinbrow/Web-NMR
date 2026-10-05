@@ -1,4 +1,5 @@
 import type { Spectrum } from "../model";
+import type { PredictedSpinSystem } from "../prediction/types";
 import { firstOrderLines } from "./predictionSplitting";
 import { savedPredictionResult } from "./predictionResult";
 
@@ -7,8 +8,28 @@ export interface PredictedHoverLine {
   atomIds: string[];
 }
 
-/** Reuse the saved calculation, including individual split lines. Exact spin
- * transitions belong to the whole coupled system, rather than one atom. */
+/** New exact calculations carry dominant transition sites. Older saved
+ * calculations use the nearest chemical-shift assignment, preserving shared
+ * equivalent/coincident signals without selecting the entire coupled system. */
+export function predictedLineSiteIds(
+  system: PredictedSpinSystem,
+  cluster: PredictedSpinSystem["display"]["clusters"][number],
+  line: PredictedSpinSystem["display"]["clusters"][number]["lines"][number],
+): string[] {
+  if (line.siteIds?.length) return line.siteIds;
+  const members = new Set(cluster.siteIds);
+  const sites = system.sites.filter((s) => members.has(s.id));
+  const distance = Math.min(
+    ...sites.map((s) => Math.abs(s.shiftPpm - line.ppm)),
+  );
+  const nearest = sites.filter(
+    (s) => Math.abs(s.shiftPpm - line.ppm) <= distance + 1e-5,
+  );
+  const equivalent = new Set(nearest.map((s) => s.equivalenceKey));
+  return sites.filter((s) => equivalent.has(s.equivalenceKey)).map((s) => s.id);
+}
+
+/** Reuse the saved calculation, including individual split lines. */
 export function predictedHoverLines(spectrum: Spectrum): PredictedHoverLine[] {
   const result = savedPredictionResult(spectrum);
   const molecule = spectrum.molecule?.document;
@@ -34,17 +55,23 @@ export function predictedHoverLines(spectrum: Spectrum): PredictedHoverLine[] {
   if (learned) {
     const sites = new Map(learned.sites.map((s) => [s.id, s]));
     for (const cluster of learned.display.clusters) {
-      const atomIds = [
-        ...new Set(
-          cluster.siteIds.flatMap((id) => {
-            const site = sites.get(id);
-            const atom = site && molecule.atoms[site.atomIndex];
-            return atom ? [atom.id] : [];
-          }),
-        ),
-      ];
-      for (const line of cluster.lines)
+      // Negligible combination transitions should not steal hover from a
+      // visible peak in the same screen-pixel neighborhood.
+      const cutoff =
+        cluster.lines.reduce((max, l) => Math.max(max, l.weight), 0) * 1e-4;
+      for (const line of cluster.lines) {
+        if (line.weight < cutoff) continue;
+        const atomIds = [
+          ...new Set(
+            predictedLineSiteIds(learned, cluster, line).flatMap((id) => {
+              const site = sites.get(id),
+                atom = site && molecule.atoms[site.atomIndex];
+              return atom ? [atom.id] : [];
+            }),
+          ),
+        ];
         lines.push({ ppm: line.ppm + spectrum.referenceOffset, atomIds });
+      }
     }
   } else {
     for (const shift of result.shifts) {

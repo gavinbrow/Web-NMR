@@ -257,4 +257,44 @@ describe("automatic predicted integral counts", () => {
       ),
     ).toBe(6);
   });
+  it("keeps the representative stereochemistry choice, comments and whole proton counts in saved projects", async () => {
+    const m = importMolecule("CCO");
+    const r: PredictionResult = {
+      ...ethanol(),
+      engine: "cascade",
+      shifts: ethanol().shifts.map((s) => ({ ...s, radius: 0 })),
+      stereoSelection: {
+        undefinedAtomIndices: [1],
+        molfile: "selected fixture molfile",
+      },
+    };
+    const setup = {
+      ...defaultPredictionSetup(),
+      engine: "cascade" as const,
+      molecule: m,
+      splitting: "none" as const,
+    };
+    const s = predictedSpectrum(r, setup, m);
+    expect(s.metadata.comments).toContain(
+      "Only one representative stereoisomer is shown (one enantiomer",
+    );
+    expect(s.prediction?.stereoMixture).toBeUndefined();
+    expect(s.integrals.map((i) => displayedIntegralValue(s, i)).sort()).toEqual(
+      [1, 2, 3],
+    );
+    const project = {
+      ...createBlankProject("Representative"),
+      spectra: [s],
+      activeId: s.id,
+      prediction: setup,
+    };
+    const reopened = await decodeProject(await encodeProject(project));
+    expect(reopened.spectra[0].prediction?.stereoSelection).toEqual(
+      r.stereoSelection,
+    );
+    expect(reopened.spectra[0].metadata.comments).toEqual(s.metadata.comments);
+    const bad = structuredClone(s.prediction)!;
+    bad.stereoSelection!.undefinedAtomIndices = [-1];
+    expect(validPredictionResult(bad)).toBe(false);
+  });
 });

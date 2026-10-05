@@ -83,8 +83,8 @@ describe("learned per-proton spin display", () => {
     s.sites[1].exchangeable = true;
     const r = renderLearnedSpinSystem(s, "spin-system", 400);
     expect(r.display.clusters.map((c) => c.lines)).toEqual([
-      [{ ppm: 1.1, weight: 1 }],
-      [{ ppm: 1.12, weight: 1 }],
+      [{ ppm: 1.1, weight: 1, siteIds: ["H:0"] }],
+      [{ ppm: 1.12, weight: 1, siteIds: ["H:1"] }],
     ]);
     expect(r.couplings).toHaveLength(1);
   });
@@ -131,14 +131,12 @@ describe("learned per-proton spin display", () => {
       equivalenceKey: `H${i}`,
     }));
     s.couplings = s.sites.flatMap((a, i) =>
-      s.sites
-        .slice(i + 1)
-        .map((b, j) => ({
-          ...s.couplings[0],
-          siteIdA: a.id,
-          siteIdB: b.id,
-          jHz: 0.51 + j * 0.2311,
-        })),
+      s.sites.slice(i + 1).map((b, j) => ({
+        ...s.couplings[0],
+        siteIdA: a.id,
+        siteIdB: b.id,
+        jHz: 0.51 + j * 0.2311,
+      })),
     );
     const r = renderLearnedSpinSystem(s, "spin-system", 400);
     expect(r.display.clusters).toHaveLength(15);

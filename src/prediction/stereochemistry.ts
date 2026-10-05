@@ -32,7 +32,7 @@ export function stereoCenters(molfile: string): StereoCenter[] {
           : cip === Molecule.cAtomCIPParitySorP
             ? "S"
             : "defined"
-        : "undefined · 50/50",
+        : "undefined · representative chosen",
     });
   }
   return centers.sort((a, b) => a.atomIndex - b.atomIndex);
@@ -42,6 +42,20 @@ export function stereoCenters(molfile: string): StereoCenter[] {
  * centers and the source atom order remain unchanged. Highly combinatorial
  * structures use a deterministic, complement-paired balanced sample. */
 export function enumerateStereoMixture(molfile: string) {
+  return stereoVariants(molfile, false);
+}
+
+/** A reproducible single configuration for a readable prediction. Explicit
+ * stereocenters and source atom slots remain unchanged. */
+export function representativeStereo(molfile: string) {
+  const selected = stereoVariants(molfile, true);
+  return {
+    atomIndices: selected.atomIndices,
+    molfile: selected.variants[0].molfile,
+  };
+}
+
+function stereoVariants(molfile: string, representativeOnly: boolean) {
   const mol = stereoGraph(molfile);
   const undefinedAtoms = Array.from(
     { length: mol.getAllAtoms() },
@@ -58,8 +72,10 @@ export function enumerateStereoMixture(molfile: string) {
     .sort((a, b) => a - b);
   if (!undefinedAtoms.length)
     return { atomIndices, sampled: false, variants: [{ molfile, weight: 1 }] };
-  const count = Math.min(64, 2 ** undefinedAtoms.length);
-  const sampled = undefinedAtoms.length > 6;
+  const count = representativeOnly
+    ? 1
+    : Math.min(64, 2 ** undefinedAtoms.length);
+  const sampled = !representativeOnly && undefinedAtoms.length > 6;
   const variants: { molfile: string; weight: number }[] = [];
   const sourceLines = molfile.split(/\r?\n/);
   const sourceCount = Number(sourceLines[3].slice(0, 3));

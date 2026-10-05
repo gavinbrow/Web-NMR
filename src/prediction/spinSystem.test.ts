@@ -16,6 +16,12 @@ describe("exact homonuclear spin Hamiltonian", () => {
       [{ a: 0, b: 1, jHz: j }],
       field,
     );
+    expect(lines.map((l) => l.siteIds)).toEqual([
+      ["Ha"],
+      ["Ha"],
+      ["Hb"],
+      ["Hb"],
+    ]);
     const r = Math.hypot(delta, j);
     expect(lines).toHaveLength(4);
     const offsets = [(r + j) / 2, (r - j) / 2, -(r - j) / 2, -(r + j) / 2];
@@ -56,7 +62,7 @@ describe("exact homonuclear spin Hamiltonian", () => {
       400,
     );
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toEqual({ ppm: 1.5, weight: 2 });
+    expect(lines[0]).toEqual({ ppm: 1.5, weight: 2, siteIds: ["a", "b"] });
   });
   it("approaches equal-height first-order doublets at high chemical-shift separation", () => {
     const lines = simulateSpinSystem(
@@ -68,6 +74,7 @@ describe("exact homonuclear spin Hamiltonian", () => {
       800,
     );
     expect(lines).toHaveLength(4);
+    expect(lines.map((l) => l.siteIds)).toEqual([["b"], ["b"], ["a"], ["a"]]);
     lines.forEach((line) => expect(line.weight).toBeCloseTo(0.5, 2));
     expect((lines[0].ppm - lines[1].ppm) * 800).toBeCloseTo(7, 8);
     expect(lines.reduce((n, l) => n + l.weight, 0)).toBeCloseTo(2, 10);
@@ -84,6 +91,7 @@ describe("exact homonuclear spin Hamiltonian", () => {
     expect(lines[0].ppm).toBeCloseTo(3.7, 12);
     expect(lines[1].ppm).toBeCloseTo(1.2, 12);
     expect(lines.map((l) => l.weight)).toEqual([1, 1]);
+    expect(lines.map((l) => l.siteIds)).toEqual([["b"], ["a"]]);
     expect(() =>
       simulateSpinSystem(
         Array.from({ length: 11 }, (_, i) => ({ id: String(i), shiftPpm: i })),

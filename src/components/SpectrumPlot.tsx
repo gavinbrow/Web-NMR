@@ -878,7 +878,7 @@ export function SpectrumPlot(p: Props) {
         const hoverIds = near
           ? nearestTrace(x, y).distance <= 18
             ? near.atomIds
-            : nearbyPredictedHoverLines(
+            : (nearbyPredictedHoverLines(
                 hoverLines,
                 ppm,
                 ((v[0] - v[1]) * 9) / pw,
@@ -886,7 +886,17 @@ export function SpectrumPlot(p: Props) {
                 .filter(
                   (line) => nearestTrace(xPixel(line.ppm), y).distance <= 18,
                 )
-                .flatMap((line) => line.atomIds)
+                .sort(
+                  (a, b) =>
+                    Math.hypot(
+                      xPixel(a.ppm) - x,
+                      nearestTrace(xPixel(a.ppm), y).distance,
+                    ) -
+                    Math.hypot(
+                      xPixel(b.ppm) - x,
+                      nearestTrace(xPixel(b.ppm), y).distance,
+                    ),
+                )[0]?.atomIds ?? [])
           : [];
         p.onPredictionHover?.([...new Set(hoverIds)]);
         setRegionHover(!!regionEdge(x, y));

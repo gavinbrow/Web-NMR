@@ -4,6 +4,7 @@ import type { MoleculeDocument } from "./molecule";
 import type { PredictionSetup } from "./predictionSetup";
 import type { PredictedTwoD, PredictionResult } from "../prediction/types";
 import { predictedSpectrum } from "./predictedSpectrum";
+import { representativeStereoComment } from "../prediction/stereoSelection";
 
 export const MAX_PREDICTED_2D_ELEMENTS = 1024 * 1024;
 export interface TwoDMapOptions {
@@ -276,7 +277,7 @@ export function predictedTwoDSpectrum(
     metadata: {
       title,
       experiment,
-      comments: `${result.engine === "cascade" ? "CASCADE local neural shifts" : "CDK local shift estimates"} · ${experiment}.\n${experiment === "HSQC" && settings.hsqcEdited ? "Edited CH₂ phase · " : ""}Illustrative correlation map.`,
+      comments: `${result.engine === "cascade" ? "CASCADE local neural shifts" : "CDK local shift estimates"} · ${experiment}.\n${experiment === "HSQC" && settings.hsqcEdited ? "Edited CH₂ phase · " : ""}Illustrative correlation map.${representativeStereoComment(result) ? `\n${representativeStereoComment(result)}` : ""}`,
       renderedLineWidthHzF2: map.renderedLineWidthHzF2,
       renderedLineWidthHzF1: map.renderedLineWidthHzF1,
     },

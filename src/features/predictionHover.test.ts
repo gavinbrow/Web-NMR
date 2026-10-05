@@ -82,7 +82,7 @@ describe("predicted peak hover atom mapping", () => {
         ?.atomIds,
     ).toEqual([molecule.atoms[0].id, molecule.atoms[1].id]);
   });
-  it("uses saved learned proton lines and collective exact spin assignments", () => {
+  it("uses saved learned lines and specific assignments for older exact spin predictions", () => {
     const { spectrum, molecule } = fixture();
     const sites = molecule.atoms.slice(0, 2).map((_, i) => ({
       id: `H${i}`,
@@ -119,7 +119,18 @@ describe("predicted peak hover atom mapping", () => {
     expect(
       nearestPredictedHoverLine(predictedHoverLines(spectrum), 1.15, 0.001)
         ?.atomIds,
-    ).toEqual([molecule.atoms[0].id, molecule.atoms[1].id]);
+    ).toEqual([molecule.atoms[0].id]);
+    spin.display.clusters[0].lines.push({ ppm: 1.98, weight: 1 });
+    expect(
+      nearestPredictedHoverLine(predictedHoverLines(spectrum), 1.98, 0.001)
+        ?.atomIds,
+    ).toEqual([molecule.atoms[1].id]);
+    // New numerical attribution takes precedence even for a displaced transition.
+    spin.display.clusters[0].lines[0].siteIds = ["H1"];
+    expect(
+      nearestPredictedHoverLine(predictedHoverLines(spectrum), 1.15, 0.001)
+        ?.atomIds,
+    ).toEqual([molecule.atoms[1].id]);
   });
   it("keeps hover transient and ignores experimental spectra or 2D maps", () => {
     const { spectrum } = fixture();
