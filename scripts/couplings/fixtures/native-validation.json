@@ -7,31 +7,31 @@
       "name": "aspirin",
       "meanMaxErrorHz": 7.62939453125e-05,
       "stdMaxErrorHz": 8.732080459594727e-06,
-      "elapsedMs": 121.85406684875488
+      "elapsedMs": 171.9069480895996
     },
     {
       "name": "butane",
       "meanMaxErrorHz": 2.288818359375e-05,
       "stdMaxErrorHz": 7.0855021476745605e-06,
-      "elapsedMs": 131.33525848388672
+      "elapsedMs": 208.34016799926758
     },
     {
       "name": "chiral-butanol-stereotopic-H",
       "meanMaxErrorHz": 3.0517578125e-05,
       "stdMaxErrorHz": 4.634261131286621e-06,
-      "elapsedMs": 114.81595039367676
+      "elapsedMs": 262.5889778137207
     },
     {
       "name": "ethanol",
       "meanMaxErrorHz": 2.288818359375e-05,
       "stdMaxErrorHz": 5.364418029785156e-06,
-      "elapsedMs": 115.30303955078125
+      "elapsedMs": 273.29421043395996
     },
     {
       "name": "glycine-zwitterion",
       "meanMaxErrorHz": 3.814697265625e-05,
       "stdMaxErrorHz": 6.9141387939453125e-06,
-      "elapsedMs": 117.2642707824707
+      "elapsedMs": 238.40093612670898
     }
   ],
   "status": "PASS",

@@ -2,14 +2,25 @@
 """Compare all fixed64 mean/std ONNX outputs to original PyTorch fixtures.
 Requires numpy+onnxruntime. Usage: python validate_onnx.py
 """
-import json,time
+import hashlib,json,time
 from pathlib import Path
 import numpy as np
 import onnxruntime as ort
 root=Path(__file__).resolve().parents[2]
 fixtures_dir=Path(__file__).resolve().parent/'fixtures'
 reference=json.loads((fixtures_dir/'reference.json').read_text())
-session=ort.InferenceSession(str(root/'public/prediction/couplings/fullsspruce-etkdg-coupling.onnx'),providers=['CPUExecutionProvider'])
+assets=root/'public/prediction/couplings'
+manifest=json.loads((assets/'fullsspruce-etkdg-coupling.json').read_text())
+parts=[];offset=0
+for chunk in manifest['weightsChunks']:
+ data=(assets/chunk['file']).read_bytes()
+ assert chunk['byteOffset']==offset and chunk['byteLength']==len(data)
+ assert hashlib.sha256(data).hexdigest()==chunk['sha256']
+ parts.append(data);offset+=len(data)
+model_bytes=b''.join(parts)
+assert len(model_bytes)==manifest['weightsByteLength']==28383464
+assert hashlib.sha256(model_bytes).hexdigest()==manifest['weightsSha256']=='58b7f73427439c05fdd4c9689801bb2fe2d34ac960f818ebba122f731a0d91f4'
+session=ort.InferenceSession(model_bytes,providers=['CPUExecutionProvider'])
 report={'runtime':ort.__version__,'provider':'CPUExecutionProvider','reference':reference['reference'],'cases':[]}
 for fixture in reference['fixtures']:
  raw=(fixtures_dir/fixture['file']).read_bytes()

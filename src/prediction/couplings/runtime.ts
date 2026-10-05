@@ -1,9 +1,7 @@
 import type { CouplingFeatures, CouplingManifest, LearnedCouplingOptions, LearnedCouplingPrediction } from './types'
 import type * as Ort from 'onnxruntime-web/wasm'
+import { loadCouplingModel } from './loader'
 
-const MODEL_SHA256 = '58b7f73427439c05fdd4c9689801bb2fe2d34ac960f818ebba122f731a0d91f4'
-const SOURCE_SHA256 = '0a847ed10df34094fd3b052ae5e74428c85be38f244aeb0941e2e87dc73f09d3'
-const MODEL_ID = 'fullsspruce-etkdg-coupling'
 interface LoadedSession { session: Ort.InferenceSession; manifest: CouplingManifest; ort: typeof Ort }
 const sessions = new Map<string, Promise<LoadedSession>>()
 
@@ -25,16 +23,10 @@ async function loadSession(options: LearnedCouplingOptions): Promise<LoadedSessi
   if (!sessions.has(base)) {
     const promise = (async () => {
       options.onProgress?.('Loading the local learned J-coupling neural network…')
-      const [ort, modelResponse, manifestResponse] = await Promise.all([
+      const [ort, { buffer, manifest }] = await Promise.all([
         import('onnxruntime-web/wasm'),
-        fetch(`${base}${MODEL_ID}.onnx`, { signal: options.signal }),
-        fetch(`${base}${MODEL_ID}.json`, { signal: options.signal }),
+        loadCouplingModel(base, options.signal),
       ])
-      if (!modelResponse.ok || !manifestResponse.ok) throw new Error('The learned coupling model assets could not be loaded.')
-      const [buffer, manifest] = await Promise.all([modelResponse.arrayBuffer(), manifestResponse.json() as Promise<CouplingManifest>])
-      const digest = await crypto.subtle.digest('SHA-256', buffer)
-      const hash = Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('')
-      if (manifest.format !== 'fullsspruce-onnx-v1' || manifest.id !== MODEL_ID || manifest.sourceSha256 !== SOURCE_SHA256 || manifest.weightsByteLength !== buffer.byteLength || manifest.weightsSha256 !== MODEL_SHA256 || hash !== MODEL_SHA256) throw new Error('Learned coupling model failed its pinned integrity check.')
       abortIfNeeded(options.signal)
       // A single-thread SIMD WASM runtime works inside a worker and does not
       // require cross-origin isolation or a server. All runtime files are local.
@@ -85,7 +77,7 @@ export async function predictLearnedCouplings(features: CouplingFeatures, option
       }
     }
     return { couplings, meanMatrixHz, stdMatrixHz, atomCount: features.atomCount, maxAtoms: 64, backend: 'wasm', metadata: {
-      modelId: MODEL_ID, sourceRepository: manifest.sourceRepository, upstreamRevision: manifest.upstreamRevision,
+      modelId: manifest.id, sourceRepository: manifest.sourceRepository, upstreamRevision: manifest.upstreamRevision,
       sourceSha256: manifest.sourceSha256, weightsSha256: manifest.weightsSha256, citation: manifest.citation,
       uncertainty: manifest.uncertainty, trainedTypes: manifest.trainedTypes, excludedProtonPairs,
       warnings: [

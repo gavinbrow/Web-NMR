@@ -26,10 +26,26 @@ molecule, feature, geometry, or prediction is sent to a remote inference service
 `disposeLearnedCouplingModels()` releases cached sessions. Tensor inputs/outputs
 are disposed after each evaluation, including canceled requests.
 
+The unchanged 28,383,464-byte ONNX binary is deployed as two static parts:
+16,777,216 bytes and 11,606,248 bytes. Each file fits below the hosting limit.
+The version-2 manifest specifies ordered filenames, contiguous offsets, lengths,
+and SHA-256 for each part, plus the original whole-model SHA-256 and fixed input
+and output dimensions. The browser validates the contract, downloads parts,
+checks their individual hashes, concatenates them, and checks the pinned original
+whole-file hash before passing the bytes to ONNX Runtime. No quantization or
+weight conversion is introduced by splitting. A complete `.onnx` file is not
+shipped in the public deployment assets.
+
 Rebuild with `scripts/couplings/convert_model.py /path/to/fullsspruce-public`.
 The original checkpoint SHA-256 is pinned before deserialization. The model
 source declares MIT in upstream `setup.py`; attribution and that declaration
 are retained in `public/prediction/couplings/NOTICE.txt`.
+The converter exports a temporary ONNX file and writes only its exact chunks
+into the public assets. `scripts/couplings/chunk_model.py` can also split an
+existing pinned ONNX file using only Python's standard library. Native
+validation reconstructs and verifies the same bytes in memory. Loader tests
+check corrupted/truncated parts, part order and offsets, model dimensions,
+cancellation, and whole-model integrity even with a falsified part hash.
 
 Numerical validation (2026-10-04): five supplied-conformer molecules cover
 ethanol, butane, aspirin, a chiral alcohol, and zwitterionic glycine. The browser

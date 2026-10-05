@@ -4,10 +4,12 @@ Usage: python convert_model.py /path/to/fullsspruce-public
 Requires pytorch, numpy and onnx. The upstream checkpoint is trusted only after
 its SHA256 matches the pinned original below. No retraining or quantization.
 """
-import argparse, hashlib, json, sys, types
+import argparse, hashlib, json, sys, types, tempfile
 from pathlib import Path
+sys.dont_write_bytecode = True
 import numpy as np
 import torch
+from chunk_model import write_model_chunks
 
 UPSTREAM_REVISION='de4fcad693eccca469b12e3505d8c3d8fe2458d5'
 SOURCE_SHA='0a847ed10df34094fd3b052ae5e74428c85be38f244aeb0941e2e87dc73f09d3'
@@ -34,17 +36,19 @@ class CouplingExport(torch.nn.Module):
 
 wrapper=CouplingExport(model).eval()
 inputs=(torch.zeros((1,119,64,64)),torch.zeros((1,64,94)),torch.full((1,64,64),-2,dtype=torch.int64))
-output=args.output/'fullsspruce-etkdg-coupling.onnx'
-with torch.no_grad():
- torch.onnx.export(wrapper,inputs,output,input_names=['adj','vect_feat','coupling_types'],output_names=['coupling_mu','coupling_std'],opset_version=17,dynamo=False,do_constant_folding=True)
- zero_mu,zero_std=wrapper(*inputs)
-onnx_bytes=output.read_bytes()
+with tempfile.TemporaryDirectory(prefix='fullsspruce-export-') as temporary:
+ output=Path(temporary)/'fullsspruce-etkdg-coupling.onnx'
+ with torch.no_grad():
+  torch.onnx.export(wrapper,inputs,output,input_names=['adj','vect_feat','coupling_types'],output_names=['coupling_mu','coupling_std'],opset_version=17,dynamo=False,do_constant_folding=True)
+  zero_mu,zero_std=wrapper(*inputs)
+ onnx_bytes=output.read_bytes()
+chunks=write_model_chunks(onnx_bytes,args.output)
 manifest={
- 'format':'fullsspruce-onnx-v1','id':'fullsspruce-etkdg-coupling',
+ 'format':'fullsspruce-onnx-chunks-v2','id':'fullsspruce-etkdg-coupling',
  'sourceRepository':'https://github.com/thejonaslab/fullsspruce-public',
  'upstreamRevision':UPSTREAM_REVISION,
  'sourceFile':'fullsspruce/default_predict_models/default_coupling_ETKDG_model.chk',
- 'sourceSha256':digest,'weightsFile':output.name,'weightsSha256':hashlib.sha256(onnx_bytes).hexdigest(),
+ 'sourceSha256':digest,'weightsChunks':chunks,'weightsSha256':hashlib.sha256(onnx_bytes).hexdigest(),
  'weightsByteLength':len(onnx_bytes),'floatPrecision':'float32','onnxOpset':17,
  'licenseDeclaration':'MIT (upstream setup.py)',
  'citation':'https://doi.org/10.1039/D3SC01930F',
@@ -57,4 +61,6 @@ manifest={
  'zeroInputReference':{'couplingTypeCode':-2,'meanHz':float(zero_mu[0,0,0,0]),'stdHz':float(zero_std[0,0,0,0])},
 }
 (args.output/'fullsspruce-etkdg-coupling.json').write_text(json.dumps(manifest,indent=2)+'\n')
+# Remove legacy deployment output when upgrading an existing asset directory.
+(args.output/'fullsspruce-etkdg-coupling.onnx').unlink(missing_ok=True)
 print(json.dumps(manifest,indent=2))

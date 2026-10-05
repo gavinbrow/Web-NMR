@@ -17,17 +17,19 @@ export interface LearnedPairCoupling {
   bondDistance: 2 | 3 | 4
 }
 export interface CouplingManifest {
-  format: 'fullsspruce-onnx-v1'
+  format: 'fullsspruce-onnx-chunks-v2'
   id: 'fullsspruce-etkdg-coupling'
   sourceRepository: string
   upstreamRevision: string
   sourceFile: string
   sourceSha256: string
-  weightsFile: string
+  weightsChunks: { file: string; byteOffset: number; byteLength: number; sha256: string }[]
   weightsSha256: string
   weightsByteLength: number
   citation: string
   maxExplicitAtoms: 64
+  inputShapes: { adj: number[]; vect_feat: number[]; coupling_types: number[] }
+  outputShapes: { coupling_mu: number[]; coupling_std: number[] }
   trainedTypes: string[]
   uncertainty: string
 }

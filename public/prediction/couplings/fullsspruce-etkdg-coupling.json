@@ -1,11 +1,10 @@
 {
-  "format": "fullsspruce-onnx-v1",
+  "format": "fullsspruce-onnx-chunks-v2",
   "id": "fullsspruce-etkdg-coupling",
   "sourceRepository": "https://github.com/thejonaslab/fullsspruce-public",
   "upstreamRevision": "de4fcad693eccca469b12e3505d8c3d8fe2458d5",
   "sourceFile": "fullsspruce/default_predict_models/default_coupling_ETKDG_model.chk",
   "sourceSha256": "0a847ed10df34094fd3b052ae5e74428c85be38f244aeb0941e2e87dc73f09d3",
-  "weightsFile": "fullsspruce-etkdg-coupling.onnx",
   "weightsSha256": "58b7f73427439c05fdd4c9689801bb2fe2d34ac960f818ebba122f731a0d91f4",
   "weightsByteLength": 28383464,
   "floatPrecision": "float32",
@@ -73,5 +72,19 @@
     "meanHz": 2.8928627967834473,
     "stdHz": 0.8832724690437317,
     "couplingTypeCode": -2
-  }
+  },
+  "weightsChunks": [
+    {
+      "file": "fullsspruce-etkdg-coupling.part-000.bin",
+      "byteOffset": 0,
+      "byteLength": 16777216,
+      "sha256": "eb9dd0457fe8f2c1b63acffed919b0437ea7f912dc3e0480c689da5d866b2345"
+    },
+    {
+      "file": "fullsspruce-etkdg-coupling.part-001.bin",
+      "byteOffset": 16777216,
+      "byteLength": 11606248,
+      "sha256": "27048b497f9bd809256ce58967619d679f8e67286b9288254a43554810d88ed2"
+    }
+  ]
 }
