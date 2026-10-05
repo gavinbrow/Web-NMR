@@ -144,6 +144,64 @@ describe("original molecule document and chemistry exchange", () => {
       );
     }
   });
+  it("exports defined wedges as absolute stereochemistry and retains it when cleaning", () => {
+    for (const smiles of [
+      "CC[C@H](O)C",
+      "N[C@@H](C)C(=O)O",
+      "[2H][C@H](C)[C@H](O)C",
+      "F/C=C/F",
+      "F/C=C\\F",
+    ]) {
+      const original = importMolecule(smiles);
+      const expected = Molecule.fromSmiles(smiles).toIsomericSmiles();
+      const cleaned = cleanMolecule(original);
+      expect(exportMoleculeSmiles(cleaned)).toBe(expected);
+      expect(
+        Molecule.fromMolfile(exportMoleculeMolfile(cleaned)).toIsomericSmiles(),
+      ).toBe(expected);
+      expect(
+        cleaned.atoms.map((a) => [
+          a.id,
+          a.index,
+          a.element,
+          a.charge,
+          a.isotope,
+        ]),
+      ).toEqual(
+        original.atoms.map((a) => [
+          a.id,
+          a.index,
+          a.element,
+          a.charge,
+          a.isotope,
+        ]),
+      );
+      expect(cleaned.bonds.map((b) => b.id)).toEqual(
+        original.bonds.map((b) => b.id),
+      );
+      if (
+        original.bonds.some((b) => b.stereo === "wedge" || b.stereo === "dash")
+      )
+        expect(
+          Number(exportMoleculeMolfile(cleaned).split("\n")[3].slice(12, 15)),
+        ).toBe(1);
+    }
+  });
+  it("keeps ordinary explicit hydrogens when importing SMILES and cleaning", () => {
+    const original = importMolecule("[H]C([H])([H])O[H]");
+    expect(original.atoms.filter((a) => a.element === "H")).toHaveLength(4);
+    expect(original.atoms).toHaveLength(6);
+    const cleaned = cleanMolecule(original);
+    expect(cleaned.atoms.map((a) => a.id)).toEqual(
+      original.atoms.map((a) => a.id),
+    );
+    expect(cleaned.bonds.map((b) => b.id)).toEqual(
+      original.bonds.map((b) => b.id),
+    );
+    expect(
+      cleaned.atoms.every((a) => Number.isFinite(a.x) && Number.isFinite(a.y)),
+    ).toBe(true);
+  });
   it("does not warn about normal aromatic fused carbons or heteroatoms", () => {
     expect(moleculeValenceWarnings(importMolecule("c1ccc2ccccc2c1"))).toEqual(
       [],

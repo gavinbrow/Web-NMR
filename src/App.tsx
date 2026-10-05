@@ -2741,7 +2741,7 @@ export default function App() {
     setTab("Analysis");
     setShowPeaks(true);
     notify(
-      `${setup.nucleus} prediction added · ${result.shifts.length} matched atom environments`,
+      `${setup.nucleus} prediction added · ${result.shifts.length} ${result.engine === "cascade" ? "atom shifts predicted" : "matched atom environments"}`,
     );
     return spectrum.prediction!;
   }

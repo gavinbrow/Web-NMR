@@ -4,6 +4,10 @@ import { displayedIntegralValue } from "../features/integrals";
 import type { SpectrumProperties } from "../features/appearance";
 import { spectrumText } from "../features/spectrumText";
 import { snapReferencePeak } from "../features/reference";
+import {
+  layoutSpectrumLabels,
+  type SpectrumLabel,
+} from "../features/spectrumLabels";
 
 interface Props {
   selectedAtomIds?: string[];
@@ -168,10 +172,81 @@ export function SpectrumPlot(p: Props) {
   useEffect(() => {
     setReferenceCursor(null);
   }, [p.tool, p.active.id, p.active.revision]);
+  const labelView = p.component === "fid" ? null : p.view;
+  const labelX = (ppm: number) =>
+    54 +
+    ((p.view[0] - ppm) / (p.view[0] - p.view[1])) * Math.max(40, size.w - 76);
+  const inLabelView = (ppm: number) =>
+    !!labelView && ppm <= labelView[0] && ppm >= labelView[1];
+  const annotationLabels: SpectrumLabel[] = [];
+  if (p.mode === "single" && p.active.molecule?.visible)
+    for (const assignment of p.active.molecule.assignments)
+      if (inLabelView(assignment.ppm))
+        annotationLabels.push({
+          id: `atom:${assignment.id}`,
+          x: labelX(assignment.ppm),
+          size: 11,
+          text:
+            assignment.label ||
+            assignment.atomIds
+              .map((id) =>
+                p.active.molecule!.document.atoms.find((a) => a.id === id),
+              )
+              .filter(Boolean)
+              .map((atom) => atom!.element + atom!.index)
+              .join(", "),
+        });
+  if (a.multipletLabels)
+    for (const m of p.active.multiplets)
+      if (inLabelView(m.center))
+        annotationLabels.push({
+          id: `multiplet:${m.id}`,
+          x: labelX(m.center),
+          size: a.multipletSize,
+          text:
+            a.multipletFormat === "name"
+              ? m.kind
+              : a.multipletFormat === "shift"
+                ? m.center.toFixed(a.multipletShiftDecimals)
+                : `${m.label} (${m.kind}) ${m.center.toFixed(a.multipletShiftDecimals)} · J ${m.couplingsHz.map((j) => j.toFixed(a.multipletJDecimals)).join(", ")} Hz`,
+        });
+  if (p.showPeaks && a.peakLabels)
+    for (const peak of [...p.active.peaks]
+      .filter((k) => inLabelView(k.ppm))
+      .sort((a, b) => Math.abs(b.height) - Math.abs(a.height))
+      .slice(0, 40))
+      annotationLabels.push({
+        id: `peak:${peak.id}`,
+        x: labelX(peak.ppm),
+        size: a.peakSize,
+        text:
+          peak.label ||
+          (
+            peak.ppm * (a.peakUnits === "Hz" ? p.active.frequencyMHz : 1)
+          ).toFixed(a.peakDecimals),
+      });
+  const annotationLayout = layoutSpectrumLabels(
+    annotationLabels,
+    54,
+    size.w - 22,
+  );
+  const annotationMap = new Map(
+    annotationLayout.placed.map((label) => [label.id, label]),
+  );
+  const treeHeight =
+    a.multipletJTree && labelView
+      ? Math.min(
+          64,
+          Math.max(
+            0,
+            ...p.active.multiplets.map((m) => m.couplingsHz.length * 8 + 24),
+          ),
+        )
+      : 0;
   const pad = {
       l: 54,
       r: 22,
-      t: p.showPeaks && p.active.peaks.length ? 44 : 18,
+      t: 18 + annotationLayout.height + treeHeight,
       b: 42,
     },
     pw = Math.max(40, size.w - pad.l - pad.r),
@@ -1025,86 +1100,123 @@ export function SpectrumPlot(p: Props) {
             </text>
           </g>
         )}
-        <g clipPath="url(#plot-clip)">
-          {!isFid &&
-            p.mode === "single" &&
-            p.active.molecule?.visible &&
-            p.active.molecule.assignments.map((assignment) => {
-              if (
-                assignment.ppm > v[0] ||
-                assignment.ppm < v[1] ||
-                !activeTrace
-              )
-                return null;
-              const selected = assignment.atomIds.some((id) =>
-                p.selectedAtomIds?.includes(id),
-              );
-              const peak = p.active.peaks.find(
-                (pk) => pk.id === assignment.peakId,
-              );
-              const y = Math.max(
-                pad.t + 62,
-                activeTrace.base - (peak?.height ?? 0) * activeTrace.scale - 10,
-              );
-              const labels = assignment.atomIds
-                .map((id) => {
-                  const atom = p.active.molecule!.document.atoms.find(
-                    (a) => a.id === id,
-                  );
-                  return atom ? atom.element + atom.index : "";
-                })
-                .filter(Boolean)
-                .join(", ");
-              return (
-                <g
-                  key={assignment.id}
-                  data-testid="atom-assignment"
-                  data-atom-ids={assignment.atomIds.join(",")}
-                  data-ppm={assignment.ppm}
-                  style={{ cursor: "pointer" }}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    p.onAssignmentSelect?.(assignment.atomIds);
-                  }}
+        {!isFid &&
+          p.mode === "single" &&
+          p.active.molecule?.visible &&
+          p.active.molecule.assignments.map((assignment) => {
+            if (assignment.ppm > v[0] || assignment.ppm < v[1] || !activeTrace)
+              return null;
+            const selected = assignment.atomIds.some((id) =>
+              p.selectedAtomIds?.includes(id),
+            );
+            const placement = annotationMap.get(`atom:${assignment.id}`);
+            if (!placement) return null;
+            const { y, center, width, displayText } = placement;
+            const labels = placement.text;
+            return (
+              <g
+                key={assignment.id}
+                data-testid="atom-assignment"
+                data-atom-ids={assignment.atomIds.join(",")}
+                data-ppm={assignment.ppm}
+                style={{ cursor: "pointer" }}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  p.onAssignmentSelect?.(assignment.atomIds);
+                }}
+              >
+                <title>
+                  {labels} · {assignment.ppm.toFixed(3)} ppm
+                </title>
+                <rect
+                  x={center - width / 2}
+                  y={y - 15}
+                  width={width}
+                  height={20}
+                  rx={3}
+                  fill={selected ? "#dceeff" : "#ffffffdd"}
+                />
+                <text
+                  x={center}
+                  y={y}
+                  textAnchor="middle"
+                  fontSize={11}
+                  fontWeight={selected ? 700 : 500}
+                  fill={selected ? "#086cbb" : "#437ea9"}
                 >
-                  <title>
-                    {labels} · {assignment.ppm.toFixed(3)} ppm
-                  </title>
-                  <rect
-                    x={
-                      xPixel(assignment.ppm) - Math.max(12, labels.length * 3.4)
-                    }
-                    y={y - 15}
-                    width={Math.max(24, labels.length * 6.8)}
-                    height={20}
-                    rx={3}
-                    fill={selected ? "#dceeff" : "#ffffffdd"}
+                  {displayText}
+                </text>
+                {selected && (
+                  <line
+                    x1={xPixel(assignment.ppm)}
+                    x2={xPixel(assignment.ppm)}
+                    y1={y + 5}
+                    y2={pad.t - 3}
+                    stroke="#1689e9"
+                    strokeWidth={1}
+                    strokeDasharray="3 3"
                   />
-                  <text
-                    x={xPixel(assignment.ppm)}
-                    y={y}
-                    textAnchor="middle"
-                    fontSize={11}
-                    fontWeight={selected ? 700 : 500}
-                    fill={selected ? "#086cbb" : "#437ea9"}
-                  >
-                    {labels}
-                  </text>
-                  {selected && (
-                    <line
-                      x1={xPixel(assignment.ppm)}
-                      x2={xPixel(assignment.ppm)}
-                      y1={y + 5}
-                      y2={activeTrace.base}
-                      stroke="#1689e9"
-                      strokeWidth={1}
-                      strokeDasharray="3 3"
-                    />
-                  )}
-                </g>
-              );
-            })}
+                )}
+              </g>
+            );
+          })}
+        {!isFid &&
+          a.multipletLabels &&
+          p.active.multiplets.map((a) => {
+            const placement = annotationMap.get(`multiplet:${a.id}`);
+            if (!placement) return null;
+            return (
+              <g
+                key={a.id}
+                transform={`translate(${activeTrace?.horizontalOffset ?? 0},0)`}
+              >
+                {p.properties.multipletBox && (
+                  <rect
+                    x={placement.center - placement.width / 2}
+                    y={placement.y - p.properties.multipletSize - 2}
+                    width={placement.width}
+                    height={p.properties.multipletSize + 8}
+                    fill={p.properties.multipletBackground}
+                    fillOpacity={p.properties.multipletOpacity / 100}
+                    stroke="#7764a1"
+                    strokeWidth={p.properties.multipletWidth}
+                  />
+                )}
+                {p.properties.multipletJTree &&
+                  a.couplingsHz.map((j, index) => (
+                    <g key={index}>
+                      {[-1, 1].map((sign) => (
+                        <line
+                          key={sign}
+                          x1={xPixel(a.center)}
+                          y1={annotationLayout.height + 12}
+                          x2={xPixel(
+                            a.center +
+                              (sign * j) /
+                                (2 * Math.max(1, p.active.frequencyMHz)),
+                          )}
+                          y2={annotationLayout.height + 24 + index * 8}
+                          stroke="#7764a1"
+                          strokeWidth={p.properties.multipletWidth}
+                        />
+                      ))}
+                    </g>
+                  ))}
+                <text
+                  x={placement.center}
+                  y={placement.y}
+                  textAnchor="middle"
+                  fontSize={p.properties.multipletSize}
+                  fontFamily={p.properties.multipletFont}
+                  fill="#7764a1"
+                >
+                  {placement.displayText}
+                </text>
+              </g>
+            );
+          })}
+        <g clipPath="url(#plot-clip)">
           {p.showIntegrals &&
             a.integrals &&
             !isFid &&
@@ -1214,70 +1326,6 @@ export function SpectrumPlot(p: Props) {
               />
             ))}
           {!isFid &&
-            a.multipletLabels &&
-            p.active.multiplets.map((a) => (
-              <g
-                key={a.id}
-                transform={`translate(${activeTrace?.horizontalOffset ?? 0},0)`}
-              >
-                {p.properties.multipletBox && (
-                  <rect
-                    x={Math.min(xPixel(a.from), xPixel(a.to))}
-                    y={pad.t + (ph * p.properties.multipletPosition) / 100 - 10}
-                    width={Math.abs(xPixel(a.from) - xPixel(a.to))}
-                    height={p.properties.multipletSize + 8}
-                    fill={p.properties.multipletBackground}
-                    fillOpacity={p.properties.multipletOpacity / 100}
-                    stroke="#7764a1"
-                    strokeWidth={p.properties.multipletWidth}
-                  />
-                )}
-                {p.properties.multipletJTree &&
-                  a.couplingsHz.map((j, index) => (
-                    <g key={index}>
-                      {[-1, 1].map((sign) => (
-                        <line
-                          key={sign}
-                          x1={xPixel(a.center)}
-                          y1={
-                            pad.t +
-                            (ph * p.properties.multipletPosition) / 100 +
-                            16
-                          }
-                          x2={xPixel(
-                            a.center +
-                              (sign * j) /
-                                (2 * Math.max(1, p.active.frequencyMHz)),
-                          )}
-                          y2={
-                            pad.t +
-                            (ph * p.properties.multipletPosition) / 100 +
-                            28 +
-                            index * 8
-                          }
-                          stroke="#7764a1"
-                          strokeWidth={p.properties.multipletWidth}
-                        />
-                      ))}
-                    </g>
-                  ))}
-                <text
-                  x={xPixel(a.center)}
-                  y={pad.t + (ph * p.properties.multipletPosition) / 100}
-                  textAnchor="middle"
-                  fontSize={p.properties.multipletSize}
-                  fontFamily={p.properties.multipletFont}
-                  fill="#7764a1"
-                >
-                  {p.properties.multipletFormat === "name"
-                    ? a.kind
-                    : p.properties.multipletFormat === "shift"
-                      ? a.center.toFixed(p.properties.multipletShiftDecimals)
-                      : `${a.label} (${a.kind}) ${a.center.toFixed(p.properties.multipletShiftDecimals)} · J ${a.couplingsHz.map((j) => j.toFixed(p.properties.multipletJDecimals)).join(", ")} Hz`}
-                </text>
-              </g>
-            ))}
-          {!isFid &&
             p.tool === "baseline" &&
             p.active.recipe.baselineAnchors.map((a, i) => (
               <circle
@@ -1333,43 +1381,44 @@ export function SpectrumPlot(p: Props) {
         </g>
         {p.showPeaks &&
           !isFid &&
-          visiblePeakLabels.map((a) => (
-            <g
-              key={a.id}
-              transform={`translate(${activeTrace?.horizontalOffset ?? 0},0)`}
-            >
-              {p.properties.peakTicks && (
-                <line
-                  x1={xPixel(a.ppm)}
-                  x2={xPixel(a.ppm)}
-                  y1={pad.t - 4}
-                  y2={pad.t - 14}
-                  stroke={p.active.color}
-                  strokeWidth={p.properties.peakWidth}
-                />
-              )}
-              {p.properties.peakLabels && (
-                <text
-                  transform={`translate(${xPixel(a.ppm) - 2},${p.properties.peakPosition === "top" ? pad.t - 18 : activeTrace ? activeTrace.base - a.height * activeTrace.scale - 9 : pad.t}) rotate(-90)`}
-                  fontFamily={p.properties.peakFont}
-                  fontSize={p.properties.peakSize}
-                  fill={
-                    p.properties.peakUseTraceColor
-                      ? p.active.color
-                      : p.properties.peakColor
-                  }
-                >
-                  {a.label ||
-                    (
-                      a.ppm *
-                      (p.properties.peakUnits === "Hz"
-                        ? p.active.frequencyMHz
-                        : 1)
-                    ).toFixed(p.properties.peakDecimals)}
-                </text>
-              )}
-            </g>
-          ))}
+          visiblePeakLabels.map((a) => {
+            const placement = annotationMap.get(`peak:${a.id}`);
+            if (!placement) return null;
+            return (
+              <g
+                key={a.id}
+                transform={`translate(${activeTrace?.horizontalOffset ?? 0},0)`}
+              >
+                {p.properties.peakTicks && (
+                  <line
+                    x1={xPixel(a.ppm)}
+                    x2={xPixel(a.ppm)}
+                    y1={pad.t - 4}
+                    y2={pad.t - 14}
+                    stroke={p.active.color}
+                    strokeWidth={p.properties.peakWidth}
+                  />
+                )}
+                {p.properties.peakLabels && (
+                  <text
+                    x={placement.center}
+                    y={placement.y}
+                    textAnchor="middle"
+                    fontFamily={p.properties.peakFont}
+                    fontSize={p.properties.peakSize}
+                    fill={
+                      p.properties.peakUseTraceColor
+                        ? p.active.color
+                        : p.properties.peakColor
+                    }
+                  >
+                    <title>{placement.text}</title>
+                    {placement.displayText}
+                  </text>
+                )}
+              </g>
+            );
+          })}
         {a.gridFrame && (
           <rect
             x={pad.l}

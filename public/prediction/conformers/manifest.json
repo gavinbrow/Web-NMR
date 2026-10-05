@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "rdkitVersion": "2025.09.1",
+  "rdkitCommit": "237a1d9027c800784afed8788540f38a3aa595f8",
+  "emscriptenVersion": "4.0.10",
+  "method": "ETKDGv3/MMFF94",
+  "defaults": {
+    "numConformers": 10,
+    "randomSeed": 61453,
+    "pruneRmsThresh": 0.5,
+    "maxMMFFIterations": 500,
+    "temperatureK": 298.15
+  },
+  "files": {
+    "WebNMRConformers.mjs": {
+      "bytes": 34360,
+      "sha256": "1f83284a236da0b74bbc2a09623beed2857db1660916817d95fb2c32739b3018"
+    },
+    "WebNMRConformers.wasm": {
+      "bytes": 2439871,
+      "sha256": "47059fb9d6bb779bb4558bca76a6122089f35cc7a2888458c133f2d9309a5851"
+    }
+  }
+}

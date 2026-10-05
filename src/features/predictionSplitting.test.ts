@@ -231,7 +231,7 @@ describe("approximate first-order proton prediction", () => {
     delete legacy.splitting;
     delete legacy.couplingOverrides;
     expect(validPredictionSetup(legacy)).toBe(true);
-    expect(predictedSpectrum(ethanol, legacy, molecule).peaks).toHaveLength(3);
+    expect(predictedSpectrum(ethanol, legacy, molecule).peaks).toHaveLength(8);
   });
   it("preserves J overrides, patterns and provenance in saved projects; rejects malformed saved J", async () => {
     const molecule = importMolecule("CCO"),

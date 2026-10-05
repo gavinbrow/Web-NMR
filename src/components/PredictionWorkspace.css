@@ -440,3 +440,16 @@
     display: none;
   }
 }
+
+.prediction-couplings > summary {
+  cursor: pointer;
+  padding: 9px;
+  border: 1px solid #485e6f;
+  border-radius: 5px;
+  color: #b8d9e7;
+  background: #2e3c48;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+label.prediction-coupling-row { display: flex; flex-direction: row; }
+label.prediction-coupling-row > input { width: 76px; flex-shrink: 0; }

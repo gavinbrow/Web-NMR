@@ -1,0 +1,77 @@
+{
+  "format": "fullsspruce-onnx-v1",
+  "id": "fullsspruce-etkdg-coupling",
+  "sourceRepository": "https://github.com/thejonaslab/fullsspruce-public",
+  "upstreamRevision": "de4fcad693eccca469b12e3505d8c3d8fe2458d5",
+  "sourceFile": "fullsspruce/default_predict_models/default_coupling_ETKDG_model.chk",
+  "sourceSha256": "0a847ed10df34094fd3b052ae5e74428c85be38f244aeb0941e2e87dc73f09d3",
+  "weightsFile": "fullsspruce-etkdg-coupling.onnx",
+  "weightsSha256": "58b7f73427439c05fdd4c9689801bb2fe2d34ac960f818ebba122f731a0d91f4",
+  "weightsByteLength": 28383464,
+  "floatPrecision": "float32",
+  "onnxOpset": 17,
+  "licenseDeclaration": "MIT (upstream setup.py)",
+  "citation": "https://doi.org/10.1039/D3SC01930F",
+  "architecture": "Decode14:8edge/vertexGRUsteps,256features,10bootstrapheads,14typeembeddings",
+  "inputShapes": {
+    "adj": [
+      1,
+      119,
+      64,
+      64
+    ],
+    "vect_feat": [
+      1,
+      64,
+      94
+    ],
+    "coupling_types": [
+      1,
+      64,
+      64
+    ]
+  },
+  "outputShapes": {
+    "coupling_mu": [
+      1,
+      64,
+      64,
+      1
+    ],
+    "coupling_std": [
+      1,
+      64,
+      64,
+      1
+    ]
+  },
+  "maxExplicitAtoms": 64,
+  "trainedTypes": [
+    "1J_CH",
+    "2J_HH",
+    "3J_HH",
+    "4J_HH"
+  ],
+  "couplingTypes": {
+    "-2": "padding/diagonal",
+    "-1": "other",
+    "0": "1J_CH",
+    "1": "2J_HH",
+    "2": "3J_HH",
+    "3": "4J_HH",
+    "4": "5J_HH",
+    "5": "6J_HH",
+    "6": "7J_HH",
+    "7": "2J_CH",
+    "8": "3J_CH",
+    "9": "1J_CC",
+    "10": "2J_CC",
+    "11": "3J_CC"
+  },
+  "uncertainty": "sqrt(unbiased variance across10bootstrap heads +1e-5),Hz",
+  "zeroInputReference": {
+    "meanHz": 2.8928627967834473,
+    "stdHz": 0.8832724690437317,
+    "couplingTypeCode": -2
+  }
+}

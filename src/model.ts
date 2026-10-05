@@ -110,6 +110,9 @@ export interface Integral {
   to: number;
   area: number;
   label: string;
+  /** Exact nucleus count from the synthesized model, separate from a measured finite-window area.
+   * Cleared when the data/limits are edited or the user chooses a measured normalization. */
+  predicted?: { nucleusCount: number; atomIds: string[] };
   /** Saved Mnova values use its own integration convention, separately from our signed ppm areas. */
   imported?: {
     source: "Mnova";

@@ -11,9 +11,12 @@
     "prebuild": "node scripts/build-prediction-source.mjs"
   },
   "dependencies": {
+    "@tensorflow/tfjs": "^4.22.0",
+    "@tensorflow/tfjs-backend-wasm": "^4.22.0",
     "fflate": "^0.8.2",
     "idb-keyval": "^6.2.2",
     "lucide-react": "^0.468.0",
+    "onnxruntime-web": "^1.30.0",
     "openchemlib": "9.22.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"

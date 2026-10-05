@@ -52,6 +52,7 @@ export function displayedIntegralValue(
   integral: Integral,
 ): number {
   return (
+    integral.predicted?.nucleusCount ??
     integral.imported?.normalizedValue ??
     integral.area * integralReportingScale(s)
   );
@@ -65,7 +66,7 @@ export function recalibrateIntegrals(
   const measurementChanged = updated.some((i) => {
     const old = s.integrals.find((a) => a.id === i.id);
     return (
-      old?.imported &&
+      (old?.imported || old?.predicted) &&
       (i.area !== old.area || i.from !== old.from || i.to !== old.to)
     );
   });
@@ -79,7 +80,11 @@ export function recalibrateIntegrals(
         anchorId: saved.id,
         target: saved.imported!.normalizedValue,
       };
-    updated = updated.map((i) => ({ ...i, imported: undefined }));
+    updated = updated.map((i) => ({
+      ...i,
+      imported: undefined,
+      predicted: undefined,
+    }));
   }
   // Existing archives recorded only the factor. Adopt their first reference so
   // subsequent changes can preserve the previously reported reference value.
@@ -128,7 +133,11 @@ export function normalizeIntegral(
     throw new Error("Choose a nonzero integral to normalize.");
   return {
     ...s,
-    integrals: s.integrals.map((i) => ({ ...i, imported: undefined })),
+    integrals: s.integrals.map((i) => ({
+      ...i,
+      imported: undefined,
+      predicted: undefined,
+    })),
     integralCalibration: { anchorId, target },
     integralScale: target / anchor.area,
     history: [

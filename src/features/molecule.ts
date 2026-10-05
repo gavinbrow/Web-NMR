@@ -354,7 +354,9 @@ export function exportMoleculeMolfile(document: MoleculeDocument): string {
     "Web NMR structure",
     "  Web NMR          2D",
     "",
-    `${field(document.atoms.length)}${field(document.bonds.length)}  0  0  0  0  0  0  0  0999 V2000`,
+    // Drawing wedges encode absolute stereochemistry. A zero V2000 chiral
+    // flag makes some readers reinterpret them as a racemic relative group.
+    `${field(document.atoms.length)}${field(document.bonds.length)}  0  0${field(document.bonds.some((b) => b.stereo === "wedge" || b.stereo === "dash") ? 1 : 0)}  0  0  0  0  0999 V2000`,
   ];
   const indices = new Map(document.atoms.map((atom, i) => [atom.id, i + 1]));
   const resolvedOrders = new Map<string, number>();
@@ -433,7 +435,7 @@ export function importMolecule(
   const molecule =
     format === "molfile"
       ? Molecule.fromMolfile(text)
-      : Molecule.fromSmiles(text);
+      : Molecule.fromSmiles(text, { noCoordinates: true });
   if (!molecule.getAllAtoms())
     throw new Error("No atoms were found in this structure.");
   if (molecule.getAllAtoms() > 300)
@@ -453,7 +455,8 @@ export function importMolecule(
         molecule.getAtomY(i) - molecule.getAtomY(0),
       ),
     ).every((distance) => distance < 0.001);
-  if (format === "smiles" || overlapping) molecule.inventCoordinates();
+  if (format === "smiles" || overlapping)
+    molecule.inventCoordinates({ keepHydrogens: true });
   molecule.ensureHelperArrays(Molecule.cHelperRings);
   const drawingScale =
     moleculeBondLength / (molecule.getAverageBondLength(false) || 1);
@@ -519,7 +522,47 @@ export function cleanMolecule(document: MoleculeDocument): MoleculeDocument {
   document.atoms.forEach((atom, i) =>
     molecule.setAtomMapNo(i, atom.index, false),
   );
-  molecule.inventCoordinates();
+  molecule.ensureHelperArrays(Molecule.cHelperParities);
+  molecule.inventCoordinates({ keepHydrogens: true });
+  molecule.setStereoBondsFromParity();
+  // Coordinate invention can move or reverse a wedge to depict the same
+  // stereocenter. Copy its new stereo bonds along with the new coordinates;
+  // retaining an old wedge on a new layout can invert absolute chirality.
+  const atomsByIndex = new Map(
+    document.atoms.map((atom) => [atom.index, atom]),
+  );
+  const stereoBonds = new Map<
+    string,
+    { from: string; to: string; stereo: "none" | "wedge" | "dash" }
+  >();
+  for (let i = 0; i < molecule.getAllBonds(); i++) {
+    const from = atomsByIndex.get(
+      molecule.getAtomMapNo(molecule.getBondAtom(0, i)),
+    )!;
+    const to = atomsByIndex.get(
+      molecule.getAtomMapNo(molecule.getBondAtom(1, i)),
+    )!;
+    const type = molecule.getBondType(i);
+    stereoBonds.set([from.id, to.id].sort().join(":"), {
+      from: from.id,
+      to: to.id,
+      stereo:
+        type === Molecule.cBondTypeUp
+          ? "wedge"
+          : type === Molecule.cBondTypeDown
+            ? "dash"
+            : "none",
+    });
+  }
+  const bonds = document.bonds.map((bond) => {
+    const depiction = stereoBonds.get([bond.from, bond.to].sort().join(":"))!;
+    if (!depiction) return bond;
+    if (depiction.stereo === "none")
+      return !bond.stereo || bond.stereo === "none"
+        ? bond
+        : { ...bond, stereo: "none" as const };
+    return { ...bond, ...depiction };
+  });
   const drawingScale =
     moleculeBondLength / (molecule.getAverageBondLength(false) || 1);
   const coordinates = new Map(
@@ -538,6 +581,7 @@ export function cleanMolecule(document: MoleculeDocument): MoleculeDocument {
   const bounds = moleculeBounds({ ...document, atoms }, 0);
   return moleculeChanged({
     ...document,
+    bonds,
     atoms: atoms.map((a) => ({
       ...a,
       x: a.x - bounds.x - bounds.width / 2,

@@ -1,16 +1,22 @@
 import type { MoleculeDocument } from "./molecule";
 import type { Spectrum } from "../model";
-import type { PredictionResult } from "../prediction/types";
+import type {
+  PredictionResult,
+  SpinCouplingOverride,
+} from "../prediction/types";
 
 export interface PredictionSetup {
+  engine?: "cdk-hose-nmrshiftdb" | "cascade";
+  numConformers?: number;
   molecule: MoleculeDocument | null;
   nucleus: "1H" | "13C";
   frequencyMHz: number;
   lineWidthHz: number;
   title: string;
-  /** Absent in older project files: retain their original unsplit display. */
-  splitting?: "none" | "first-order";
+  /** Missing in older setups: new predictions use splitting unless explicitly disabled. */
+  splitting?: "none" | "first-order" | "spin-system";
   couplingOverrides?: CouplingOverride[];
+  spinCouplingOverrides?: SpinCouplingOverride[];
 }
 export interface CouplingOverride {
   atomIdA: string;
@@ -33,6 +39,8 @@ export interface SpectrumMolecule {
 }
 export function defaultPredictionSetup(): PredictionSetup {
   return {
+    engine: "cdk-hose-nmrshiftdb",
+    numConformers: 10,
     molecule: null,
     nucleus: "1H",
     frequencyMHz: 400,
@@ -163,6 +171,12 @@ export function validPredictionSetup(value: unknown): value is PredictionSetup {
   const p = value as PredictionSetup;
   return (
     !!p &&
+    (p.engine === undefined ||
+      ["cdk-hose-nmrshiftdb", "cascade"].includes(p.engine)) &&
+    (p.numConformers === undefined ||
+      (Number.isInteger(p.numConformers) &&
+        p.numConformers >= 1 &&
+        p.numConformers <= 10)) &&
     (p.molecule === null || validMoleculeDocument(p.molecule)) &&
     ["1H", "13C"].includes(p.nucleus) &&
     Number.isFinite(p.frequencyMHz) &&
@@ -174,7 +188,20 @@ export function validPredictionSetup(value: unknown): value is PredictionSetup {
     typeof p.title === "string" &&
     p.title.length <= 500 &&
     (p.splitting === undefined ||
-      ["none", "first-order"].includes(p.splitting)) &&
+      ["none", "first-order", "spin-system"].includes(p.splitting)) &&
+    (p.spinCouplingOverrides === undefined ||
+      (Array.isArray(p.spinCouplingOverrides) &&
+        p.spinCouplingOverrides.length <= 2016 &&
+        p.spinCouplingOverrides.every(
+          (c) =>
+            c &&
+            [c.atomIndexA, c.atomIndexB].every(
+              (n) => Number.isInteger(n) && n >= 0 && n < 64,
+            ) &&
+            c.atomIndexA !== c.atomIndexB &&
+            Number.isFinite(c.jHz) &&
+            Math.abs(c.jHz) <= 100,
+        ))) &&
     (p.couplingOverrides === undefined ||
       (Array.isArray(p.couplingOverrides) &&
         p.couplingOverrides.length <= 1000 &&
@@ -239,7 +266,7 @@ export function validPredictionResult(
   const r = value as PredictionResult;
   return (
     !!r &&
-    r.engine === "cdk-hose-nmrshiftdb" &&
+    ["cdk-hose-nmrshiftdb", "cascade"].includes(r.engine) &&
     typeof r.dataset === "string" &&
     r.dataset.length < 1000 &&
     ["1H", "13C"].includes(r.nucleus) &&
@@ -261,14 +288,29 @@ export function validPredictionResult(
         [s.shiftPpm, s.minPpm, s.maxPpm, s.sampleCount, s.hydrogenCount].every(
           Number.isFinite,
         ) &&
+        (s.explicitAtomIndex === undefined ||
+          (Number.isInteger(s.explicitAtomIndex) &&
+            s.explicitAtomIndex >= 0 &&
+            s.explicitAtomIndex < 300)) &&
+        (s.hydrogenOrdinal === undefined ||
+          (Number.isInteger(s.hydrogenOrdinal) &&
+            s.hydrogenOrdinal >= 0 &&
+            s.hydrogenOrdinal < 8)) &&
+        (s.atomLabel === undefined ||
+          (typeof s.atomLabel === "string" && s.atomLabel.length < 100)) &&
+        (s.conformerStdDevPpm === undefined ||
+          (Number.isFinite(s.conformerStdDevPpm) &&
+            s.conformerStdDevPpm >= 0)) &&
         s.sampleCount > 0 &&
         s.hydrogenCount > 0 &&
         Number.isInteger(s.radius) &&
-        s.radius >= 1 &&
+        s.radius >= (r.engine === "cascade" ? 0 : 1) &&
         s.radius <= 6 &&
         typeof s.hoseCode === "string" &&
         s.hoseCode.length < 10000,
     ) &&
+    (r.cascade === undefined || validCascadeMetadata(r.cascade)) &&
+    (r.spinSystem === undefined || validSpinSystem(r.spinSystem, r.shifts)) &&
     (r.splitting === undefined ||
       validPredictionSplitting(r.splitting, r.shifts))
   );
@@ -280,7 +322,7 @@ function validPredictionSplitting(
 ): boolean {
   if (
     !value ||
-    !["none", "first-order"].includes(value.mode) ||
+    !["none", "first-order", "spin-system"].includes(value.mode) ||
     !Number.isFinite(value.renderedLineWidthHz) ||
     value.renderedLineWidthHz <= 0 ||
     value.renderedLineWidthHz > 1000 ||
@@ -318,15 +360,163 @@ function validPredictionSplitting(
         Number.isFinite(s.shiftPpm) &&
         Number.isInteger(s.hydrogenCount) &&
         s.hydrogenCount > 0 &&
-        s.hydrogenCount <= 8 &&
+        s.hydrogenCount <= 64 &&
         typeof s.kind === "string" &&
         s.kind.length < 100 &&
         Number.isInteger(s.lineCount) &&
         s.lineCount >= 1 &&
-        s.lineCount <= 1024 &&
+        s.lineCount <= 100_000 &&
         Array.isArray(s.couplingsHz) &&
         s.couplingsHz.length <= 100 &&
         s.couplingsHz.every((j) => Number.isFinite(j) && j > 0 && j <= 100),
     )
   );
+}
+
+function validCascadeMetadata(
+  c: NonNullable<PredictionResult["cascade"]>,
+): boolean {
+  return (
+    !!c &&
+    typeof c.modelId === "string" &&
+    c.modelId.length < 100 &&
+    [c.weightsSha256, c.sourceSha256].every(
+      (h) => typeof h === "string" && /^[0-9a-f]{64}$/.test(h),
+    ) &&
+    Number.isInteger(c.conformerCount) &&
+    c.conformerCount >= 1 &&
+    c.conformerCount <= 10 &&
+    Array.isArray(c.conformerWeights) &&
+    c.conformerWeights.length === c.conformerCount &&
+    c.conformerWeights.every((w) => Number.isFinite(w) && w >= 0 && w <= 1) &&
+    Math.abs(c.conformerWeights.reduce((a, b) => a + b, 0) - 1) < 1e-5 &&
+    Number.isFinite(c.temperatureKelvin) &&
+    c.temperatureKelvin > 0 &&
+    c.temperatureKelvin < 10000 &&
+    [c.backend, c.rdkitVersion, c.geometryMethod, c.lineage].every(
+      (v) => typeof v === "string" && v.length < 1000,
+    )
+  );
+}
+function validSpinSystem(
+  s: NonNullable<PredictionResult["spinSystem"]>,
+  shifts: PredictionResult["shifts"],
+): boolean {
+  if (
+    !s ||
+    !Array.isArray(s.sites) ||
+    !s.sites.length ||
+    s.sites.length > 64 ||
+    !Array.isArray(s.couplings) ||
+    s.couplings.length > 2016 ||
+    !s.model ||
+    !s.display
+  )
+    return false;
+  const ids = new Set<string>(),
+    explicit = new Set<number>();
+  for (const site of s.sites) {
+    if (
+      !site ||
+      typeof site.id !== "string" ||
+      site.id.length > 200 ||
+      ids.has(site.id) ||
+      !Number.isInteger(site.explicitAtomIndex) ||
+      site.explicitAtomIndex < 0 ||
+      site.explicitAtomIndex >= 64 ||
+      explicit.has(site.explicitAtomIndex) ||
+      !Number.isInteger(site.atomIndex) ||
+      !shifts.some(
+        (v) =>
+          v.atomIndex === site.atomIndex &&
+          v.explicitAtomIndex === site.explicitAtomIndex,
+      ) ||
+      !Number.isInteger(site.hydrogenOrdinal) ||
+      site.hydrogenOrdinal < 0 ||
+      site.hydrogenOrdinal > 7 ||
+      typeof site.atomLabel !== "string" ||
+      site.atomLabel.length > 100 ||
+      typeof site.equivalenceKey !== "string" ||
+      site.equivalenceKey.length > 10000 ||
+      typeof site.exchangeable !== "boolean" ||
+      !Number.isFinite(site.shiftPpm)
+    )
+      return false;
+    ids.add(site.id);
+    explicit.add(site.explicitAtomIndex);
+  }
+  const pairs = new Set<string>();
+  for (const c of s.couplings) {
+    if (
+      !c ||
+      !ids.has(c.siteIdA) ||
+      !ids.has(c.siteIdB) ||
+      c.siteIdA === c.siteIdB ||
+      ![c.jHz, c.predictedJHz, c.modelStdHz].every(Number.isFinite) ||
+      Math.abs(c.jHz) > 100 ||
+      Math.abs(c.predictedJHz) > 100 ||
+      c.modelStdHz < 0 ||
+      c.modelStdHz > 1000 ||
+      (c.equivalenceKey !== undefined &&
+        (typeof c.equivalenceKey !== "string" ||
+          c.equivalenceKey.length > 4096)) ||
+      ![2, 3, 4].includes(c.bondDistance) ||
+      !["fullsspruce", "manual"].includes(c.source)
+    )
+      return false;
+    const key = [c.siteIdA, c.siteIdB].sort().join("|");
+    if (pairs.has(key)) return false;
+    pairs.add(key);
+  }
+  const m = s.model,
+    d = s.display;
+  if (
+    ![m.modelId, m.upstreamRevision, m.citation, m.rdkitVersion].every(
+      (v) => typeof v === "string" && v.length < 1000,
+    ) ||
+    ![m.weightsSha256, m.sourceSha256].every(
+      (h) => typeof h === "string" && /^[0-9a-f]{64}$/.test(h),
+    ) ||
+    !Number.isInteger(m.excludedProtonPairs) ||
+    m.excludedProtonPairs < 0 ||
+    !["none", "first-order", "spin-system"].includes(d.mode) ||
+    !Number.isFinite(d.frequencyMHz) ||
+    d.frequencyMHz < 10 ||
+    d.frequencyMHz > 2000 ||
+    !Array.isArray(d.warnings) ||
+    d.warnings.length > 100 ||
+    !d.warnings.every((w) => typeof w === "string" && w.length < 10000) ||
+    !Array.isArray(d.clusters) ||
+    d.clusters.length > 64
+  )
+    return false;
+  const seen = new Set<string>();
+  for (const c of d.clusters) {
+    if (
+      !c ||
+      !Array.isArray(c.siteIds) ||
+      !c.siteIds.length ||
+      c.siteIds.length > 64 ||
+      !c.siteIds.every((id) => ids.has(id) && !seen.has(id)) ||
+      new Set(c.siteIds).size !== c.siteIds.length ||
+      !Array.isArray(c.lines) ||
+      !c.lines.length ||
+      c.lines.length > 250000 ||
+      !c.lines.every(
+        (l) =>
+          l &&
+          Number.isFinite(l.ppm) &&
+          Number.isFinite(l.weight) &&
+          l.weight > 0,
+      )
+    )
+      return false;
+    c.siteIds.forEach((id) => seen.add(id));
+    if (
+      Math.abs(c.lines.reduce((n, l) => n + l.weight, 0) - c.siteIds.length) >
+      0.0001
+    )
+      return false;
+  }
+  return seen.size === ids.size;
 }

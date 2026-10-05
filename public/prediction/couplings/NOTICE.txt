@@ -1,0 +1,20 @@
+FullSSPrUCe: Full Spin System Predictions with Uncertainty
+Author: The Jonas Lab
+Source: https://github.com/thejonaslab/fullsspruce-public
+Source revision: de4fcad693eccca469b12e3505d8c3d8fe2458d5
+Source checkpoint: fullsspruce/default_predict_models/default_coupling_ETKDG_model.chk
+Source checkpoint SHA-256: 0a847ed10df34094fd3b052ae5e74428c85be38f244aeb0941e2e87dc73f09d3
+
+The upstream setup.py declares license='MIT' and classifier
+'License :: OSI Approved :: MIT License'. The upstream repository does not
+contain a separate LICENSE file. The declaration is preserved here without
+inventing an upstream copyright notice.
+
+Publication: Rapid Prediction of Full Spin Systems using Uncertainty-Aware
+Machine Learning, https://doi.org/10.1039/D3SC01930F
+
+The included ONNX graph preserves the pretrained float32 model. This browser
+port does not retrain or quantize the model.
+
+ONNX Runtime is Copyright Microsoft Corporation and licensed under MIT.
+Its license accompanies the runtime files in wasm/LICENSE-ONNXRUNTIME.txt.

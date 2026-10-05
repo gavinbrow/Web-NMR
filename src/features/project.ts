@@ -471,6 +471,16 @@ export function validateProject(value: unknown): asserts value is Project {
       );
     }
     for (const i of s.integrals)
+      if (i.predicted)
+        assert(
+          finite(i.predicted.nucleusCount) &&
+            i.predicted.nucleusCount > 0 &&
+            Array.isArray(i.predicted.atomIds) &&
+            i.predicted.atomIds.length <= 300 &&
+            i.predicted.atomIds.every(text),
+          "Invalid predicted integral counts.",
+        );
+    for (const i of s.integrals)
       if (i.imported)
         assert(
           i.imported.source === "Mnova" &&

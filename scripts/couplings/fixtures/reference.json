@@ -1,0 +1,413 @@
+{
+  "reference": "Original upstream FullSSPrUCe PyTorch checkpoint, unmodified upstream RDKit featurization",
+  "torchVersion": "2.14.1",
+  "fixtures": [
+    {
+      "name": "aspirin",
+      "file": "aspirin.bin",
+      "sha256": "93f5cbd7d368b37720262adacee8a0f404596304d8a58a6df891bab6483f61d4",
+      "arrays": {
+        "pairFeatures": {
+          "byteOffset": 0,
+          "elementCount": 487424,
+          "dtype": "float32"
+        },
+        "atomFeatures": {
+          "byteOffset": 1949696,
+          "elementCount": 6016,
+          "dtype": "float32"
+        },
+        "couplingTypes": {
+          "byteOffset": 1973760,
+          "elementCount": 4096,
+          "dtype": "int32"
+        },
+        "meanMatrixHz": {
+          "byteOffset": 1990144,
+          "elementCount": 4096,
+          "dtype": "float32"
+        },
+        "stdMatrixHz": {
+          "byteOffset": 2006528,
+          "elementCount": 4096,
+          "dtype": "float32"
+        }
+      },
+      "atomCount": 21,
+      "maxAtoms": 64,
+      "atomicNumbers": [
+        6,
+        6,
+        8,
+        8,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        8,
+        8,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "originalAtomIndices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "hydrogenParents": [
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        0,
+        0,
+        0,
+        5,
+        6,
+        7,
+        8,
+        12
+      ]
+    },
+    {
+      "name": "butane",
+      "file": "butane.bin",
+      "sha256": "d895e3bba9e6ac7a4720573cd5ce047c4ee9ed7a9c2d4ebdeac2265226434a61",
+      "arrays": {
+        "pairFeatures": {
+          "byteOffset": 0,
+          "elementCount": 487424,
+          "dtype": "float32"
+        },
+        "atomFeatures": {
+          "byteOffset": 1949696,
+          "elementCount": 6016,
+          "dtype": "float32"
+        },
+        "couplingTypes": {
+          "byteOffset": 1973760,
+          "elementCount": 4096,
+          "dtype": "int32"
+        },
+        "meanMatrixHz": {
+          "byteOffset": 1990144,
+          "elementCount": 4096,
+          "dtype": "float32"
+        },
+        "stdMatrixHz": {
+          "byteOffset": 2006528,
+          "elementCount": 4096,
+          "dtype": "float32"
+        }
+      },
+      "atomCount": 14,
+      "maxAtoms": 64,
+      "atomicNumbers": [
+        6,
+        6,
+        6,
+        6,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "originalAtomIndices": [
+        0,
+        1,
+        2,
+        3,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "hydrogenParents": [
+        -1,
+        -1,
+        -1,
+        -1,
+        0,
+        0,
+        0,
+        1,
+        1,
+        2,
+        2,
+        3,
+        3,
+        3
+      ]
+    },
+    {
+      "name": "chiral-butanol-stereotopic-H",
+      "file": "chiral-butanol-stereotopic-H.bin",
+      "sha256": "89f564baff25d6f48fac1aabfbe3f5c2b7dc8fbba5fb84629fceadaafedfb075",
+      "arrays": {
+        "pairFeatures": {
+          "byteOffset": 0,
+          "elementCount": 487424,
+          "dtype": "float32"
+        },
+        "atomFeatures": {
+          "byteOffset": 1949696,
+          "elementCount": 6016,
+          "dtype": "float32"
+        },
+        "couplingTypes": {
+          "byteOffset": 1973760,
+          "elementCount": 4096,
+          "dtype": "int32"
+        },
+        "meanMatrixHz": {
+          "byteOffset": 1990144,
+          "elementCount": 4096,
+          "dtype": "float32"
+        },
+        "stdMatrixHz": {
+          "byteOffset": 2006528,
+          "elementCount": 4096,
+          "dtype": "float32"
+        }
+      },
+      "atomCount": 15,
+      "maxAtoms": 64,
+      "atomicNumbers": [
+        6,
+        6,
+        6,
+        8,
+        6,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "originalAtomIndices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "hydrogenParents": [
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        0,
+        0,
+        0,
+        1,
+        1,
+        2,
+        3,
+        4,
+        4,
+        4
+      ]
+    },
+    {
+      "name": "ethanol",
+      "file": "ethanol.bin",
+      "sha256": "aaa2a02708d070b229a5c161b6771435ff7772308cb3e560b35b519a6c851ff9",
+      "arrays": {
+        "pairFeatures": {
+          "byteOffset": 0,
+          "elementCount": 487424,
+          "dtype": "float32"
+        },
+        "atomFeatures": {
+          "byteOffset": 1949696,
+          "elementCount": 6016,
+          "dtype": "float32"
+        },
+        "couplingTypes": {
+          "byteOffset": 1973760,
+          "elementCount": 4096,
+          "dtype": "int32"
+        },
+        "meanMatrixHz": {
+          "byteOffset": 1990144,
+          "elementCount": 4096,
+          "dtype": "float32"
+        },
+        "stdMatrixHz": {
+          "byteOffset": 2006528,
+          "elementCount": 4096,
+          "dtype": "float32"
+        }
+      },
+      "atomCount": 9,
+      "maxAtoms": 64,
+      "atomicNumbers": [
+        6,
+        6,
+        8,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "originalAtomIndices": [
+        0,
+        1,
+        2,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "hydrogenParents": [
+        -1,
+        -1,
+        -1,
+        0,
+        0,
+        0,
+        1,
+        1,
+        2
+      ]
+    },
+    {
+      "name": "glycine-zwitterion",
+      "file": "glycine-zwitterion.bin",
+      "sha256": "5c81f8c31fa27536d72aed67efb717affe7a8617b5437c6dad974a4abf7a6259",
+      "arrays": {
+        "pairFeatures": {
+          "byteOffset": 0,
+          "elementCount": 487424,
+          "dtype": "float32"
+        },
+        "atomFeatures": {
+          "byteOffset": 1949696,
+          "elementCount": 6016,
+          "dtype": "float32"
+        },
+        "couplingTypes": {
+          "byteOffset": 1973760,
+          "elementCount": 4096,
+          "dtype": "int32"
+        },
+        "meanMatrixHz": {
+          "byteOffset": 1990144,
+          "elementCount": 4096,
+          "dtype": "float32"
+        },
+        "stdMatrixHz": {
+          "byteOffset": 2006528,
+          "elementCount": 4096,
+          "dtype": "float32"
+        }
+      },
+      "atomCount": 10,
+      "maxAtoms": 64,
+      "atomicNumbers": [
+        7,
+        6,
+        6,
+        8,
+        8,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "originalAtomIndices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        -1,
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "hydrogenParents": [
+        -1,
+        -1,
+        -1,
+        -1,
+        -1,
+        0,
+        0,
+        0,
+        1,
+        1
+      ]
+    }
+  ]
+}
