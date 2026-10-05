@@ -5,6 +5,11 @@ import type { SpectrumProperties } from "../features/appearance";
 import { spectrumText } from "../features/spectrumText";
 import { snapReferencePeak } from "../features/reference";
 import {
+  predictedHoverLines,
+  nearestPredictedHoverLine,
+  nearbyPredictedHoverLines,
+} from "../features/predictionHover";
+import {
   layoutSpectrumLabels,
   type SpectrumLabel,
 } from "../features/spectrumLabels";
@@ -12,6 +17,7 @@ import {
 interface Props {
   selectedAtomIds?: string[];
   onAssignmentSelect?: (ids: string[]) => void;
+  onPredictionHover?: (ids: string[]) => void;
   stackComments?: boolean;
   regions?: {
     id?: string;
@@ -252,6 +258,15 @@ export function SpectrumPlot(p: Props) {
     pw = Math.max(40, size.w - pad.l - pad.r),
     ph = Math.max(80, size.h - pad.t - pad.b);
   const isFid = p.component === "fid";
+  const hoverLines = useMemo(
+    () => predictedHoverLines(p.active),
+    [
+      p.active.prediction,
+      p.active.molecule?.document,
+      p.active.referenceOffset,
+      p.active.frequencyMHz,
+    ],
+  );
   const fidView: [number, number] = p.active.fid
     ? [0, (p.active.fid.real.length - 1) * p.active.fid.dwellSeconds]
     : p.view;
@@ -774,6 +789,7 @@ export function SpectrumPlot(p: Props) {
         } else p.onFit();
       }}
       onPointerDown={(e) => {
+        p.onPredictionHover?.([]);
         if (e.button !== 0) return;
         const x = pointerX(e);
         if (x < pad.l || x > pad.l + pw) return;
@@ -841,6 +857,38 @@ export function SpectrumPlot(p: Props) {
         const x = pointerX(e);
         const ppm = ppmAt(Math.max(pad.l, Math.min(pad.l + pw, x)));
         const y = e.clientY - host.current!.getBoundingClientRect().top;
+        const near =
+          !drag &&
+          !regionDrag &&
+          !space.current &&
+          !isFid &&
+          p.mode === "single" &&
+          x >= pad.l &&
+          x <= pad.l + pw &&
+          y >= pad.t &&
+          y <= pad.t + ph
+            ? nearestPredictedHoverLine(
+                hoverLines,
+                ppm,
+                ((v[0] - v[1]) * 9) / pw,
+              )
+            : undefined;
+        // Also test the line's apex so a narrow peak remains easy to hover
+        // when its entire linewidth occupies less than one screen pixel.
+        const hoverIds = near
+          ? nearestTrace(x, y).distance <= 18
+            ? near.atomIds
+            : nearbyPredictedHoverLines(
+                hoverLines,
+                ppm,
+                ((v[0] - v[1]) * 9) / pw,
+              )
+                .filter(
+                  (line) => nearestTrace(xPixel(line.ppm), y).distance <= 18,
+                )
+                .flatMap((line) => line.atomIds)
+          : [];
+        p.onPredictionHover?.([...new Set(hoverIds)]);
         setRegionHover(!!regionEdge(x, y));
         if (regionDrag) {
           const from = regionDrag.edge === "from" ? ppm : regionDrag.from;
@@ -883,11 +931,13 @@ export function SpectrumPlot(p: Props) {
         setDrag((d) => (d ? { ...d, end: x } : null));
       }}
       onPointerLeave={() => {
+        p.onPredictionHover?.([]);
         setCursor(null);
         setReferenceCursor(null);
         setRegionHover(false);
       }}
       onPointerCancel={() => {
+        p.onPredictionHover?.([]);
         setRegionDrag(null);
         setDrag(null);
       }}
@@ -1121,6 +1171,12 @@ export function SpectrumPlot(p: Props) {
                 data-ppm={assignment.ppm}
                 style={{ cursor: "pointer" }}
                 onPointerDown={(e) => e.stopPropagation()}
+                onPointerMove={(e) => {
+                  if (!hoverLines.length) return;
+                  e.stopPropagation();
+                  p.onPredictionHover?.(assignment.atomIds);
+                }}
+                onPointerLeave={() => p.onPredictionHover?.([])}
                 onClick={(e) => {
                   e.stopPropagation();
                   p.onAssignmentSelect?.(assignment.atomIds);

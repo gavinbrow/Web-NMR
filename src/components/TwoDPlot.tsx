@@ -33,6 +33,7 @@ interface Props {
   baselinePoints?: { xPpm: number; yPpm: number; value: number }[];
   selectedAtomIds?: string[];
   onAssignmentSelect?: (atomIds: string[]) => void;
+  onPredictionHover?: (atomIds: string[]) => void;
 }
 export function initialTwoDView(s: Spectrum, saved?: TwoDView): TwoDView {
   if (validTwoDView(saved || s.twoDView)) return saved || s.twoDView!;
@@ -90,6 +91,7 @@ export function TwoDPlot({
   baselinePoints,
   selectedAtomIds = [],
   onAssignmentSelect,
+  onPredictionHover,
 }: Props) {
   const m = s.twoD!,
     host = useRef<HTMLDivElement>(null),
@@ -460,6 +462,7 @@ export function TwoDPlot({
         if (!(e.target as HTMLElement).closest("[data-two-d-controls]")) full();
       }}
       onPointerDown={(e) => {
+        onPredictionHover?.([]);
         if (
           e.button !== 0 ||
           (e.target as HTMLElement).closest("[data-two-d-controls]") ||
@@ -532,6 +535,28 @@ export function TwoDPlot({
       }}
       onPointerMove={(e) => {
         const p = pos(e);
+        let nearest = Infinity;
+        let atomIds: string[] = [];
+        if (
+          !drag &&
+          !space.current &&
+          inContour(local(e)) &&
+          !(e.target as HTMLElement).closest("[data-two-d-controls]")
+        ) {
+          for (const c of visibleCorrelations) {
+            const distance = Math.hypot(
+              px(c.xPpm + s.referenceOffset) - p.x,
+              py(c.yPpm + m.referenceOffsetF1) - p.y,
+            );
+            if (distance > 11) continue;
+            if (distance < nearest - 0.01) {
+              nearest = distance;
+              atomIds = [c.atomIdX, c.atomIdY];
+            } else if (Math.abs(distance - nearest) <= 0.01)
+              atomIds.push(c.atomIdX, c.atomIdY);
+          }
+        }
+        onPredictionHover?.([...new Set(atomIds)]);
         if (tool === "reference" && inContour(local(e))) {
           const peak = snapTwoDPeak(m, atX(p.x), atY(p.y), s.referenceOffset, [
             ((xView[0] - xView[1]) * 8) / w,
@@ -564,8 +589,14 @@ export function TwoDPlot({
             ],
           });
       }}
-      onPointerCancel={() => setDrag(null)}
-      onPointerLeave={() => setCursor(null)}
+      onPointerCancel={() => {
+        setDrag(null);
+        onPredictionHover?.([]);
+      }}
+      onPointerLeave={() => {
+        setCursor(null);
+        onPredictionHover?.([]);
+      }}
     >
       <svg
         ref={svg}

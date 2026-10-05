@@ -542,6 +542,14 @@ export default function App() {
   );
   const [selectedAtomIds, setSelectedAtomIds] = useState<string[]>([]),
     [assigningAtoms, setAssigningAtoms] = useState(false);
+  const [hoveredAtomIds, setHoveredAtomIds] = useState<string[]>([]);
+  const hoverPredictionAtoms = (ids: string[]) => {
+    setHoveredAtomIds((current) =>
+      current.length === ids.length && current.every((id, i) => id === ids[i])
+        ? current
+        : ids,
+    );
+  };
   const initial = useMemo(() => createDemoSpectra(), []);
   const [spectra, setSpectra] = useState<Spectrum[]>(initial),
     [activeId, setActiveId] = useState(initial[0]?.id ?? ""),
@@ -1147,6 +1155,19 @@ export default function App() {
     setSelectedAtomIds([]);
     setAssigningAtoms(false);
   }, [activeId, documents.activeDocumentId]);
+  useEffect(() => {
+    setHoveredAtomIds([]);
+  }, [
+    activeId,
+    documents.activeDocumentId,
+    tool,
+    mode,
+    component,
+    view,
+    active?.referenceOffset,
+    active?.revision,
+    active?.twoDView,
+  ]);
   async function deleteRecoveryProject(id?: string) {
     if (!recovery || recoveryBusy) return;
     setRecoveryBusy(true);
@@ -4557,6 +4578,7 @@ export default function App() {
             <div className="page-stage">
               <div
                 className="spectrum-page"
+                onPointerLeave={() => hoverPredictionAtoms([])}
                 style={{
                   width: `${activeProperties.paperWidth}%`,
                   height: `${activeProperties.paperHeight}%`,
@@ -4578,6 +4600,7 @@ export default function App() {
                     onImport1D={() => traceInput.current?.click()}
                     selectedAtomIds={selectedAtomIds}
                     onAssignmentSelect={setSelectedAtomIds}
+                    onPredictionHover={hoverPredictionAtoms}
                     viewState={active.twoDView}
                     onViewChange={(v) =>
                       setSpectra((all) =>
@@ -4666,6 +4689,7 @@ export default function App() {
                     exportRef={svgExport}
                     selectedAtomIds={selectedAtomIds}
                     onAssignmentSelect={setSelectedAtomIds}
+                    onPredictionHover={hoverPredictionAtoms}
                   />
                 )}
                 {active.molecule?.visible && mode === "single" && (
@@ -4674,6 +4698,7 @@ export default function App() {
                       key={active.id}
                       value={active.molecule}
                       selectedAtomIds={selectedAtomIds}
+                      hoveredAtomIds={hoveredAtomIds}
                       assigning={assigningAtoms}
                       onSelectAtom={(id, multi) => {
                         setSelectedAtomIds((ids) =>

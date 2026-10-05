@@ -7,6 +7,7 @@ import "./SpectrumMoleculeOverlay.css";
 export function SpectrumMoleculeOverlay(p: {
   value: SpectrumMolecule;
   selectedAtomIds: string[];
+  hoveredAtomIds?: string[];
   assigning: boolean;
   onSelectAtom: (id: string, multi?: boolean) => void;
   onChange: (value: SpectrumMolecule) => void;
@@ -114,6 +115,7 @@ export function SpectrumMoleculeOverlay(p: {
         <MoleculeView
           molecule={p.value.document}
           selectedAtomIds={p.selectedAtomIds}
+          highlightedAtomIds={p.hoveredAtomIds}
           onSelectAtom={p.onSelectAtom}
           showAtomNumbers
         />

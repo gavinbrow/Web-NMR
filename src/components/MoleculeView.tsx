@@ -10,6 +10,7 @@ import "./MoleculeEditor.css";
 export interface MoleculeViewProps {
   molecule: MoleculeDocument | null;
   selectedAtomIds?: string[];
+  highlightedAtomIds?: string[];
   onSelectAtom?: (atomId: string, additive?: boolean) => void;
   showAtomNumbers?: boolean;
   className?: string;
@@ -28,6 +29,7 @@ const atomColors: Record<string, string> = {
 export function MoleculeGlyphs({
   molecule,
   selectedAtomIds = [],
+  highlightedAtomIds = [],
   onSelectAtom,
   showAtomNumbers = true,
 }: Omit<MoleculeViewProps, "className" | "style">) {
@@ -47,6 +49,7 @@ export function MoleculeGlyphs({
   );
   if (!molecule) return null;
   const selected = new Set(selectedAtomIds);
+  const highlighted = new Set(highlightedAtomIds);
   const atoms = new Map(molecule.atoms.map((atom) => [atom.id, atom]));
   return (
     <g className="molecule-glyphs">
@@ -197,7 +200,7 @@ export function MoleculeGlyphs({
         return (
           <g
             key={atom.id}
-            className={`molecule-atom ${selected.has(atom.id) ? "is-selected" : ""}`}
+            className={`molecule-atom ${selected.has(atom.id) ? "is-selected" : ""} ${highlighted.has(atom.id) ? "is-highlighted" : ""}`}
             role={selectable ? "button" : undefined}
             tabIndex={selectable ? 0 : undefined}
             aria-label={
@@ -240,6 +243,15 @@ export function MoleculeGlyphs({
                 cx={atom.x}
                 cy={atom.y}
                 r={15}
+              />
+            )}
+            {highlighted.has(atom.id) && (
+              <circle
+                className="molecule-atom-highlight"
+                data-testid="predicted-atom-highlight"
+                cx={atom.x}
+                cy={atom.y}
+                r={16}
               />
             )}
             {label && (
@@ -302,6 +314,7 @@ export function MoleculeGlyphs({
 export function MoleculeView({
   molecule,
   selectedAtomIds,
+  highlightedAtomIds,
   onSelectAtom,
   showAtomNumbers = true,
   className = "",
@@ -319,6 +332,7 @@ export function MoleculeView({
           <MoleculeGlyphs
             molecule={molecule}
             selectedAtomIds={selectedAtomIds}
+            highlightedAtomIds={highlightedAtomIds}
             onSelectAtom={onSelectAtom}
             showAtomNumbers={showAtomNumbers}
           />
