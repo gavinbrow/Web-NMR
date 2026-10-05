@@ -11,9 +11,11 @@ export function LearnedCouplingControls(p: {
   if (!system)
     return (
       <p className="prediction-splitting-note">
-        Enable splitting and predict the structure to calculate per-proton J
-        values. The local 3D model includes geminal, vicinal, and four-bond
-        couplings.
+        {p.setup.experiment === "COSY"
+          ? "Predict"
+          : "Enable splitting and predict"}{" "}
+        the structure to calculate per-proton J values. The local 3D model
+        includes geminal, vicinal, and four-bond couplings.
       </p>
     );
   const site = new Map(system.sites.map((s) => [s.id, s]));
@@ -64,7 +66,9 @@ export function LearnedCouplingControls(p: {
               </strong>
               <small>
                 {c.bondDistance} bonds
-                {group.length > 1 ? ` · ${group.length} equivalent pairs` : ""}{" "}
+                {group.length > 1
+                  ? ` · ${group.length} equivalent pairs`
+                  : ""}{" "}
                 · model {c.predictedJHz.toFixed(2)} · spread{" "}
                 {c.modelStdHz.toFixed(2)} Hz
               </small>

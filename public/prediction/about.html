@@ -50,11 +50,11 @@
       <a href="/">← Web NMR</a>
       <h1>Prediction data and source</h1>
       <p>
-        Web NMR offers browser-native CASCADE neural prediction and a browser port
-        of CDK 2.9's HOSE environment algorithm and the experimental lookup data
-        supplied by nmrshiftdb's standalone predictor jars. Molecular parsing
-        and layout use OpenChemLib. The drawing interface is original Web NMR
-        code and uses no Ketcher code.
+        Web NMR offers browser-native CASCADE neural prediction and a browser
+        port of CDK 2.9's HOSE environment algorithm and the experimental lookup
+        data supplied by nmrshiftdb's standalone predictor jars. Molecular
+        parsing and layout use OpenChemLib. The drawing interface is original
+        Web NMR code and uses no Ketcher code.
       </p>
       <p>
         Structures and per-molecule calculations remain in your browser. The
@@ -63,15 +63,98 @@
         reused from browser storage.
       </p>
       <h2>CASCADE and learned splitting</h2>
-      <p>CASCADE runs entirely in the browser with the original pretrained float32 neural weights. A dedicated worker generates real RDKit 2025.09.1 ETKDGv3/MMFF94 conformers and averages chemical shifts with Boltzmann populations at 298.15 K. The carbon ExpNN-ff model was trained against experimental shifts with force-field geometry. The proton DFTNN model was trained against DFT shifts and geometries; using MMFF conformers is a geometry approximation. Neither model treats solvent or exchange explicitly.</p>
-      <p>Added and original hydrogen coordinates are aligned across conformers using isotope-replacement stereochemical identities. Equivalent sites are averaged; diastereotopic CH₂ sites keep separate Ha/Hb predictions. Letters identify stable sites, not pro-R/pro-S assignments. Deuterium and tritium are excluded from ¹H counts; isotope shifts and D/T coupling are not predicted.</p>
-      <p>FullSSPrUCe provides signed, learned two-, three-, and four-bond proton J values using the original ETKDG checkpoint and its exact 94-atom-feature/119-pair-channel input. Ten model heads provide a model-disagreement spread in Hz, not a calibrated experimental error bar. The model supports 64 explicit atoms including hydrogens. Symmetry-equivalent proton pairs are averaged using two-site isotope replacement identities, preserving different ortho/meta couplings and magnetic non-equivalence. OH/NH/SH coupling is omitted under fast exchange, and J magnitudes below 0.05 Hz are omitted from the display while remaining in the saved coupling table.</p>
-      <p>Exact isotropic spin-½ Hamiltonian simulation includes second-order roofing and magnetic non-equivalence for connected systems of up to ten protons. Transition strengths use the total transverse magnetization operator. These collective transitions are not assigned to individual atoms. Larger connected systems have an explicit first-order display option with learned J values. The app never silently substitutes first-order patterns for an exact calculation.</p>
+      <p>
+        CASCADE runs entirely in the browser with the original pretrained
+        float32 neural weights. A dedicated worker generates real RDKit
+        2025.09.1 ETKDGv3/MMFF94 conformers and averages chemical shifts with
+        Boltzmann populations at 298.15 K. The carbon ExpNN-ff model was trained
+        against experimental shifts with force-field geometry. The proton DFTNN
+        model was trained against DFT shifts and geometries; using MMFF
+        conformers is a geometry approximation. Neither model treats solvent or
+        exchange explicitly.
+      </p>
+      <p>
+        Added and original hydrogen coordinates are aligned across conformers
+        using isotope-replacement stereochemical identities. Equivalent sites
+        are averaged; diastereotopic CH₂ sites keep separate Ha/Hb predictions.
+        Letters identify stable sites, not pro-R/pro-S assignments. Deuterium
+        and tritium are excluded from ¹H counts; isotope shifts and D/T coupling
+        are not predicted.
+      </p>
+      <p>
+        FullSSPrUCe provides signed, learned two-, three-, and four-bond proton
+        J values using the original ETKDG checkpoint and its exact
+        94-atom-feature/119-pair-channel input. Ten model heads provide a
+        model-disagreement spread in Hz, not a calibrated experimental error
+        bar. The model supports 64 explicit atoms including hydrogens.
+        Symmetry-equivalent proton pairs are averaged using two-site isotope
+        replacement identities, preserving different ortho/meta couplings and
+        magnetic non-equivalence. OH/NH/SH coupling is omitted under fast
+        exchange, and J magnitudes below 0.05 Hz are omitted from the display
+        while remaining in the saved coupling table.
+      </p>
+      <p>
+        Exact isotropic spin-½ Hamiltonian simulation includes second-order
+        roofing and magnetic non-equivalence for connected systems of up to ten
+        protons. Transition strengths use the total transverse magnetization
+        operator. These collective transitions are not assigned to individual
+        atoms. Larger connected systems have an explicit first-order display
+        option with learned J values. The app never silently substitutes
+        first-order patterns for an exact calculation.
+      </p>
       <h2>CDK lookup</h2>
-      <p>CDK tries six surrounding HOSE spheres down to one, preserving nmrshiftdb’s mean, range and sample count. Fewer matching spheres and broad ranges indicate less specific evidence. Its splitting option uses editable typical J magnitudes, not a learned coupling model; stereotopic protons and second-order effects remain unresolved in this lookup method. Missing environments are reported and omitted; negative shifts are retained.</p>
+      <p>
+        CDK tries six surrounding HOSE spheres down to one, preserving
+        nmrshiftdb’s mean, range and sample count. Fewer matching spheres and
+        broad ranges indicate less specific evidence. Its splitting option uses
+        editable typical J magnitudes, not a learned coupling model; stereotopic
+        protons and second-order effects remain unresolved in this lookup
+        method. Missing environments are reported and omitted; negative shifts
+        are retained.
+      </p>
       <h2>Display, integrals, and validation</h2>
-      <p>Splitting starts enabled. Carbon signals are proton-decoupled. Complex Lorentzian line shapes preserve modeled nucleus areas, with a bounded adaptive display grid that reports any additional broadening. Automatic integrals report modeled nucleus counts for unsplit and first-order predictions. For exact spin systems, regions cover the actual collective transitions and report their summed proton-equivalent areas, which can be fractional under strong coupling. Overlapping regions combine their areas. A carbon count is structural stoichiometry, not a claim that experimental decoupled carbon integrals are quantitative. Manual normalization or changed integration limits switch to measured-area reporting while preserving the reference target. Project files retain model hashes, explicit-H identities, signed J values and overrides, transition intensities, conformer provenance, and the full prediction setup.</p>
-      <p>Tests compare browser CASCADE with the original Python/Keras model, browser J inference and features with the original PyTorch/RDKit model, conformer geometry with native RDKit, and spin transitions with independent NumPy calculations. Tested model parity does not establish exact experimental accuracy for arbitrary molecules.</p>
+      <p>
+        HSQC and COSY are available with either prediction engine. HSQC combines
+        predicted proton and carbon shifts with direct C–H attachment from the
+        structure. Multiplicity editing gives CH₂ the opposite sign to CH and
+        CH₃. CASCADE preserves separate Ha/Hb sites. COSY adds proton diagonals
+        and symmetric cross-peaks from learned FullSSPrUCe couplings with
+        CASCADE, or editable typical coupling estimates with CDK, above the
+        chosen absolute-J cutoff. Exchangeable-proton transfer and cross-peaks
+        between chemically equivalent sites are omitted.
+      </p>
+      <p>
+        These 2D predictions are illustrative correlation maps. Peak weights and
+        contours do not simulate pulse timing, transfer efficiency, relaxation,
+        or strong-coupling 2D fine structure. Each prediction adds one spectrum
+        with embedded 1D side traces and atom-linked cross-peaks. Project saves
+        retain both shift predictions, couplings, assignments, settings, matrix
+        and traces. Excel exports include calibrated cross-peak coordinates and
+        atom pairs.
+      </p>
+      <p>
+        Splitting starts enabled. Carbon signals are proton-decoupled. Complex
+        Lorentzian line shapes preserve modeled nucleus areas, with a bounded
+        adaptive display grid that reports any additional broadening. Automatic
+        integrals report modeled nucleus counts for unsplit and first-order
+        predictions. For exact spin systems, regions cover the actual collective
+        transitions and report their summed proton-equivalent areas, which can
+        be fractional under strong coupling. Overlapping regions combine their
+        areas. A carbon count is structural stoichiometry, not a claim that
+        experimental decoupled carbon integrals are quantitative. Manual
+        normalization or changed integration limits switch to measured-area
+        reporting while preserving the reference target. Project files retain
+        model hashes, explicit-H identities, signed J values and overrides,
+        transition intensities, conformer provenance, and the full prediction
+        setup.
+      </p>
+      <p>
+        Tests compare browser CASCADE with the original Python/Keras model,
+        browser J inference and features with the original PyTorch/RDKit model,
+        conformer geometry with native RDKit, and spin transitions with
+        independent NumPy calculations. Tested model parity does not establish
+        exact experimental accuracy for arbitrary molecules.
+      </p>
       <h2>Source and licenses</h2>
       <p>
         <a class="button" href="source.zip" download
@@ -104,10 +187,36 @@
           · original predictor lookup and experimental reference tables ·
           included AGPL version 3 license.
         </li>
-        <li><a href="https://github.com/patonlab/CASCADE">CASCADE</a> · original pretrained weights · <a href="/cascade/LICENSE-CASCADE.txt">MIT</a> · <a href="https://doi.org/10.1039/D1SC03343C">publication</a>.</li>
-        <li><a href="https://github.com/thejonaslab/fullsspruce-public">FullSSPrUCe</a> · learned coupling weights · <a href="couplings/NOTICE.txt">upstream MIT declaration and provenance</a> · <a href="https://doi.org/10.1039/D3SC01930F">publication</a>.</li>
-        <li><a href="https://github.com/rdkit/rdkit/tree/Release_2025_09_1">RDKit</a> · native conformer engine compiled to WebAssembly · <a href="conformers/RDKIT-LICENSE.txt">BSD license</a>. The <a href="conformers/manifest.json">build manifest</a> lists pinned sources and bundled dependency licenses.</li>
-        <li><a href="https://github.com/tensorflow/tfjs">TensorFlow.js</a> · <a href="/cascade/LICENSE-TENSORFLOWJS.txt">Apache-2.0</a>; <a href="https://github.com/microsoft/onnxruntime">ONNX Runtime</a> · <a href="couplings/wasm/LICENSE-ONNXRUNTIME.txt">MIT</a>.</li>
+        <li>
+          <a href="https://github.com/patonlab/CASCADE">CASCADE</a> · original
+          pretrained weights · <a href="/cascade/LICENSE-CASCADE.txt">MIT</a> ·
+          <a href="https://doi.org/10.1039/D1SC03343C">publication</a>.
+        </li>
+        <li>
+          <a href="https://github.com/thejonaslab/fullsspruce-public"
+            >FullSSPrUCe</a
+          >
+          · learned coupling weights ·
+          <a href="couplings/NOTICE.txt"
+            >upstream MIT declaration and provenance</a
+          >
+          · <a href="https://doi.org/10.1039/D3SC01930F">publication</a>.
+        </li>
+        <li>
+          <a href="https://github.com/rdkit/rdkit/tree/Release_2025_09_1"
+            >RDKit</a
+          >
+          · native conformer engine compiled to WebAssembly ·
+          <a href="conformers/RDKIT-LICENSE.txt">BSD license</a>. The
+          <a href="conformers/manifest.json">build manifest</a> lists pinned
+          sources and bundled dependency licenses.
+        </li>
+        <li>
+          <a href="https://github.com/tensorflow/tfjs">TensorFlow.js</a> ·
+          <a href="/cascade/LICENSE-TENSORFLOWJS.txt">Apache-2.0</a>;
+          <a href="https://github.com/microsoft/onnxruntime">ONNX Runtime</a> ·
+          <a href="couplings/wasm/LICENSE-ONNXRUNTIME.txt">MIT</a>.
+        </li>
         <li>
           <a href="https://github.com/cheminfo/openchemlib-js"
             >OpenChemLib JS</a

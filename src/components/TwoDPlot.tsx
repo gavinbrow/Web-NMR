@@ -31,6 +31,8 @@ interface Props {
   referencePoint?: { x: number; y: number };
   onBaselinePoint?: (x: number, y: number, value: number) => void;
   baselinePoints?: { xPpm: number; yPpm: number; value: number }[];
+  selectedAtomIds?: string[];
+  onAssignmentSelect?: (atomIds: string[]) => void;
 }
 export function initialTwoDView(s: Spectrum, saved?: TwoDView): TwoDView {
   if (validTwoDView(saved || s.twoDView)) return saved || s.twoDView!;
@@ -86,6 +88,8 @@ export function TwoDPlot({
   referencePoint,
   onBaselinePoint,
   baselinePoints,
+  selectedAtomIds = [],
+  onAssignmentSelect,
 }: Props) {
   const m = s.twoD!,
     host = useRef<HTMLDivElement>(null),
@@ -124,6 +128,9 @@ export function TwoDPlot({
       pan: boolean;
     } | null>(null),
     [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
+  const [selectedCorrelation, setSelectedCorrelation] = useState<string | null>(
+    null,
+  );
   const matrixIdentity = useRef(m);
   const sourceEchoes = useRef(new Set([traceSourceKey(view)]));
   const identity = useRef(s.id),
@@ -140,6 +147,7 @@ export function TwoDPlot({
       setView(next);
       setDrag(null);
       setCursor(null);
+      setSelectedCorrelation(null);
     }
   }, [s.id, m, viewState]);
   useEffect(() => {
@@ -284,22 +292,46 @@ export function TwoDPlot({
   const topPoints = useMemo(
     () =>
       traceEnvelope(
-        topSource?.data || projections.top,
+        topSource?.data ||
+          (view.topSpectrumId === "__projection__"
+            ? undefined
+            : s.predictedTraces?.top) ||
+          projections.top,
         topSource?.referenceOffset ?? s.referenceOffset,
         xView,
         w,
       ),
-    [topSource, projections, s.referenceOffset, xView, w],
+    [
+      topSource,
+      s.predictedTraces,
+      view.topSpectrumId,
+      projections,
+      s.referenceOffset,
+      xView,
+      w,
+    ],
   );
   const leftPoints = useMemo(
     () =>
       traceEnvelope(
-        leftSource?.data || projections.left,
+        leftSource?.data ||
+          (view.leftSpectrumId === "__projection__"
+            ? undefined
+            : s.predictedTraces?.left) ||
+          projections.left,
         leftSource?.referenceOffset ?? m.referenceOffsetF1,
         yView,
         h,
       ),
-    [leftSource, projections, m.referenceOffsetF1, yView, h],
+    [
+      leftSource,
+      s.predictedTraces,
+      view.leftSpectrumId,
+      projections,
+      m.referenceOffsetF1,
+      yView,
+      h,
+    ],
   );
   const topPath = useMemo(
     () =>
@@ -361,6 +393,26 @@ export function TwoDPlot({
   };
   const inContour = (p: { x: number; y: number }) =>
     p.x >= left && p.x <= left + w && p.y >= top && p.y <= top + h;
+  const correlations = s.prediction?.twoD?.correlations ?? [];
+  const visibleCorrelations = correlations.filter(
+    (c) =>
+      c.xPpm + s.referenceOffset <= xView[0] &&
+      c.xPpm + s.referenceOffset >= xView[1] &&
+      c.yPpm + m.referenceOffsetF1 <= yView[0] &&
+      c.yPpm + m.referenceOffsetF1 >= yView[1],
+  );
+  const correlationLabel = (c: (typeof correlations)[number]) => {
+    const atom = (id: string, site?: string) => {
+      const a = s.molecule?.document.atoms.find((a) => a.id === id);
+      return site ?? (a ? `${a.element}${a.index}` : "Atom");
+    };
+    return `${atom(c.atomIdX, c.protonLabelX)} ↔ ${atom(c.atomIdY, c.protonLabelY)} · ${(c.xPpm + s.referenceOffset).toFixed(3)} / ${(c.yPpm + m.referenceOffsetF1).toFixed(3)} ppm${c.jHz !== undefined ? ` · J ${c.jHz.toFixed(2)} Hz` : ""}`;
+  };
+  const chooseCorrelation = (id: string | null) => {
+    setSelectedCorrelation(id);
+    const c = correlations.find((c) => c.id === id);
+    onAssignmentSelect?.(c ? [...new Set([c.atomIdX, c.atomIdY])] : []);
+  };
   const pos = (e: React.PointerEvent) => {
     const p = local(e);
     return {
@@ -416,6 +468,26 @@ export function TwoDPlot({
           return;
         e.currentTarget.setPointerCapture(e.pointerId);
         const p = pos(e);
+        if (
+          (tool === "select" || tool === "peak") &&
+          !space.current &&
+          correlations.length
+        ) {
+          let nearest: (typeof correlations)[number] | undefined;
+          let distance = 11;
+          for (const c of visibleCorrelations) {
+            const d = Math.hypot(
+              px(c.xPpm + s.referenceOffset) - p.x,
+              py(c.yPpm + m.referenceOffsetF1) - p.y,
+            );
+            if (d < distance) {
+              nearest = c;
+              distance = d;
+            }
+          }
+          chooseCorrelation(nearest?.id ?? null);
+          if (nearest) return;
+        }
         if (tool === "reference" && !space.current) {
           const peak = snapTwoDPeak(m, atX(p.x), atY(p.y), s.referenceOffset, [
             ((xView[0] - xView[1]) * 8) / w,
@@ -578,6 +650,38 @@ export function TwoDPlot({
               strokeWidth={Math.max(0.6, a.lineWidth * 0.7)}
             />
           ))}
+          {visibleCorrelations.map((c) => (
+            <circle
+              key={c.id}
+              cx={px(c.xPpm + s.referenceOffset)}
+              cy={py(c.yPpm + m.referenceOffsetF1)}
+              r={selectedCorrelation === c.id ? 9 : 6}
+              fill="transparent"
+              data-ui="true"
+              data-testid="predicted-correlation"
+              role="button"
+              tabIndex={0}
+              aria-label={correlationLabel(c)}
+              stroke={
+                selectedCorrelation === c.id ||
+                selectedAtomIds.some(
+                  (id) => c.atomIdX === id || c.atomIdY === id,
+                )
+                  ? "#1589db"
+                  : "transparent"
+              }
+              strokeWidth="1.4"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  chooseCorrelation(c.id);
+                }
+              }}
+            >
+              <title>{correlationLabel(c)}</title>
+            </circle>
+          ))}
         </g>
         {a.title && (
           <text
@@ -715,6 +819,26 @@ export function TwoDPlot({
           />
         )}
       </svg>
+      {selectedCorrelation &&
+        correlations.some((c) => c.id === selectedCorrelation) && (
+          <div
+            className="two-d-correlation-info"
+            data-two-d-controls="true"
+            role="status"
+          >
+            <span>
+              {correlationLabel(
+                correlations.find((c) => c.id === selectedCorrelation)!,
+              )}
+            </span>
+            <button
+              aria-label="Clear cross-peak selection"
+              onClick={() => chooseCorrelation(null)}
+            >
+              ×
+            </button>
+          </div>
+        )}
       <div
         ref={settingsActions}
         className="two-d-actions"
@@ -761,7 +885,11 @@ export function TwoDPlot({
             Top 1D source ({s.nucleus})
             <select
               aria-label="Top trace source"
-              value={topSource?.id || ""}
+              value={
+                view.topSpectrumId === "__projection__"
+                  ? "__projection__"
+                  : topSource?.id || ""
+              }
               onChange={(e) =>
                 update({
                   topSpectrumId: e.target.value || undefined,
@@ -769,7 +897,14 @@ export function TwoDPlot({
                 })
               }
             >
-              <option value="">2D skyline projection</option>
+              <option value="">
+                {s.predictedTraces
+                  ? "Predicted ¹H trace"
+                  : "2D skyline projection"}
+              </option>
+              {s.predictedTraces && (
+                <option value="__projection__">2D skyline projection</option>
+              )}
               {topSources.map((source) => (
                 <option key={source.id} value={source.id}>
                   {source.label}
@@ -781,7 +916,11 @@ export function TwoDPlot({
             Left 1D source ({m.nucleusF1})
             <select
               aria-label="Left trace source"
-              value={leftSource?.id || ""}
+              value={
+                view.leftSpectrumId === "__projection__"
+                  ? "__projection__"
+                  : leftSource?.id || ""
+              }
               onChange={(e) =>
                 update({
                   leftSpectrumId: e.target.value || undefined,
@@ -789,7 +928,14 @@ export function TwoDPlot({
                 })
               }
             >
-              <option value="">2D skyline projection</option>
+              <option value="">
+                {s.predictedTraces
+                  ? `Predicted ${m.nucleusF1} trace`
+                  : "2D skyline projection"}
+              </option>
+              {s.predictedTraces && (
+                <option value="__projection__">2D skyline projection</option>
+              )}
               {leftSources.map((source) => (
                 <option key={source.id} value={source.id}>
                   {source.label}
@@ -802,7 +948,9 @@ export function TwoDPlot({
             ppm. Scroll over each red trace to scale it independently.
           </small>
           <small title="Each projection displays the largest absolute crosspeak at each ppm as a positive amplitude, with an estimated noise floor removed. Signs remain in the contours; full matrix and imported 1D data are unchanged.">
-            Default: amplitude skyline with display noise suppression.
+            {s.predictedTraces
+              ? "Default: predicted 1D spectra. Contour intensities are approximate."
+              : "Default: amplitude skyline with display noise suppression."}
           </small>
           <div className="two-d-inline">
             <button
@@ -815,7 +963,7 @@ export function TwoDPlot({
                 })
               }
             >
-              Use projections
+              {s.predictedTraces ? "Use predicted traces" : "Use projections"}
             </button>
             <button onClick={() => update({ topGain: 1, leftGain: 1 })}>
               Reset trace heights

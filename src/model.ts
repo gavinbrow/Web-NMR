@@ -157,7 +157,8 @@ export interface TwoDSpectrum {
     | "Bruker processed 2D"
     | "Mnova native processed 2D"
     | "Bruker raw 2D magnitude"
-    | "Bruker raw 2D absorption";
+    | "Bruker raw 2D absorption"
+    | "Predicted 2D";
   mode: "absorption" | "magnitude";
   acquisitionMode?: "States" | "States-TPPI" | "Echo-Antiecho" | "QF";
 }
@@ -212,6 +213,8 @@ export interface Spectrum {
   twoDRaw?: TwoDRawData;
   twoDRecipe?: TwoDProcessingRecipe;
   twoDView?: TwoDView;
+  /** Local prediction traces belong to this 2D document, not additional datasets. */
+  predictedTraces?: { top: ComplexData; left: ComplexData };
   properties?: SpectrumProperties;
   id: string;
   label: string;

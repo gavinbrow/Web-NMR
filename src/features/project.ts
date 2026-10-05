@@ -122,6 +122,7 @@ function validateTwoD(data: TwoDSpectrum): void {
         "Mnova native processed 2D",
         "Bruker raw 2D magnitude",
         "Bruker raw 2D absorption",
+        "Predicted 2D",
       ].includes(data.source) &&
       ["absorption", "magnitude"].includes(data.mode),
     "Invalid 2D acquisition metadata.",
@@ -273,6 +274,23 @@ export function validateProject(value: unknown): asserts value is Project {
       s.prediction === undefined || validPredictionResult(s.prediction),
       "Invalid saved prediction result.",
     );
+    if (s.prediction?.twoD) {
+      assert(
+        s.twoD && s.twoD.experiment === s.prediction.twoD.experiment,
+        "Predicted correlations require their matching 2D experiment.",
+      );
+      if (s.molecule) {
+        const atoms = s.molecule.document.atoms;
+        assert(
+          s.prediction.twoD.correlations.every(
+            (c) =>
+              atoms[c.atomIndexX]?.id === c.atomIdX &&
+              atoms[c.atomIndexY]?.id === c.atomIdY,
+          ),
+          "Invalid 2D correlation atom mapping.",
+        );
+      }
+    }
     assert(
       s.properties === undefined || validProperties(s.properties),
       "Invalid spectrum appearance properties.",
@@ -312,6 +330,11 @@ export function validateProject(value: unknown): asserts value is Project {
     validateData(s.original);
     validateData(s.data);
     if (s.twoD) validateTwoD(s.twoD);
+    if (s.predictedTraces) {
+      assert(s.twoD, "Predicted traces require a 2D spectrum.");
+      validateData(s.predictedTraces.top);
+      validateData(s.predictedTraces.left);
+    }
     if (s.twoDOriginal) {
       assert(s.twoD, "2D source requires a 2D spectrum.");
       validateTwoD(s.twoDOriginal);

@@ -335,7 +335,7 @@ function analysisSheet(s: Spectrum, options: SpectrumReportOptions): Sheet {
       [String(s.metadata.title || s.label) + " analysis"],
     ],
     headers = new Set<number>();
-  if (s.twoD)
+  if (s.twoD) {
     rows.push(
       ["Dimension", "2D matrix"],
       [
@@ -343,7 +343,48 @@ function analysisSheet(s: Spectrum, options: SpectrumReportOptions): Sheet {
         "1D integrals, peaks and multiplets are not exported as 2D measurements.",
       ],
     );
-  else {
+    if (s.prediction?.twoD) {
+      rows.push(
+        [
+          "Prediction",
+          `${s.prediction.twoD.experiment} · ${s.prediction.engine}`,
+        ],
+        [
+          "Interpretation",
+          "Predicted atom correlations; weights are illustrative, not measured peak volumes or simulated pulse-sequence intensities.",
+        ],
+        [],
+      );
+      headers.add(rows.length);
+      rows.push([
+        "Correlation ID",
+        "F2 (ppm)",
+        "F1 (ppm)",
+        "F2 atom",
+        "F1 atom",
+        "Type",
+        "Sign",
+        "J (Hz)",
+        "Coupling source",
+      ]);
+      const atom = (id: string, label?: string) => {
+        const a = s.molecule?.document.atoms.find((a) => a.id === id);
+        return label ?? (a ? `${a.element}${a.index}` : id);
+      };
+      for (const c of s.prediction.twoD.correlations)
+        rows.push([
+          c.id,
+          c.xPpm + s.referenceOffset,
+          c.yPpm + s.twoD.referenceOffsetF1,
+          atom(c.atomIdX, c.protonLabelX),
+          atom(c.atomIdY, c.protonLabelY),
+          c.kind,
+          c.sign,
+          c.jHz ?? "",
+          c.source ?? "Direct bond",
+        ]);
+    }
+  } else {
     const integrals = s.integrals.map((region) => ({
       ...region,
       area: integrate(s.data, s.referenceOffset, region.from, region.to),

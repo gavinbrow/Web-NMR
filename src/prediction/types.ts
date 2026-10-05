@@ -41,6 +41,8 @@ export interface PredictionResult {
   /** Separate from database chemical shifts: editable, approximate first-order display. */
   splitting?: PredictionSplitting;
   spinSystem?: PredictedSpinSystem;
+  /** Atom-linked approximate correlation map, not a pulse-sequence simulation. */
+  twoD?: PredictedTwoD;
   cascade?: {
     modelId: string;
     weightsSha256: string;
@@ -53,6 +55,40 @@ export interface PredictionResult {
     geometryMethod: string;
     lineage: string;
   };
+}
+export interface PredictedTwoDCorrelation {
+  id: string;
+  kind: "direct" | "diagonal" | "cross";
+  xPpm: number;
+  yPpm: number;
+  /** Original zero-based drawing/input atom positions, never RDKit-added H indices. */
+  atomIndexX: number;
+  atomIndexY: number;
+  atomIdX: string;
+  atomIdY: string;
+  siteIdX?: string;
+  siteIdY?: string;
+  protonLabelX?: string;
+  protonLabelY?: string;
+  /** Positive illustrative transfer weight, separate from the editing phase. */
+  weight: number;
+  sign: 1 | -1;
+  /** Signed scalar J; sign is not used as a COSY peak phase. */
+  jHz?: number;
+  source?: "fullsspruce" | "estimate" | "manual";
+}
+export interface PredictedTwoD {
+  experiment: "HSQC" | "COSY";
+  correlations: PredictedTwoDCorrelation[];
+  carbonResult?: PredictionResult;
+  settings: {
+    hsqcEdited: boolean;
+    cosyMinJHz: number;
+    protonFrequencyMHz: number;
+    carbonFrequencyMHz: number;
+    lineWidthHz: number;
+  };
+  warnings: string[];
 }
 export interface PredictedCoupling {
   atomIndexA: number;

@@ -147,7 +147,9 @@ export function SpectrumMoleculeOverlay(p: {
                 })
               }
             >
-              {a.ppm.toFixed(3)} ppm <X size={10} />
+              {a.ppm.toFixed(3)}
+              {a.ppmF1 !== undefined ? ` / ${a.ppmF1.toFixed(3)}` : ""} ppm{" "}
+              <X size={10} />
             </button>
           ))}
         </div>

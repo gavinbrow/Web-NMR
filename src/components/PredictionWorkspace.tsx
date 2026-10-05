@@ -68,6 +68,8 @@ function PredictionNumber(p: {
   );
 }
 export default function PredictionWorkspace(p: Props) {
+  const experiment = p.setup.experiment ?? p.setup.nucleus;
+  const isTwoD = experiment === "HSQC" || experiment === "COSY";
   const [running, setRunning] = useState(false),
     [progress, setProgress] = useState(""),
     [error, setError] = useState(""),
@@ -88,7 +90,15 @@ export default function PredictionWorkspace(p: Props) {
     [],
   );
   const settings = (patch: Partial<PredictionSetup>) => {
-    if (patch.molecule || patch.nucleus || patch.engine || patch.numConformers)
+    if (
+      patch.molecule ||
+      patch.nucleus ||
+      patch.engine ||
+      patch.numConformers ||
+      patch.experiment ||
+      patch.hsqcEdited !== undefined ||
+      patch.cosyMinJHz !== undefined
+    )
       setResult(null);
     setError("");
     const next = { ...p.setup, ...patch };
@@ -103,6 +113,21 @@ export default function PredictionWorkspace(p: Props) {
       );
     }
     p.onChange(next);
+  };
+  const selectExperiment = (
+    value: NonNullable<PredictionSetup["experiment"]>,
+  ) => {
+    const nucleus = value === "13C" ? "13C" : "1H";
+    settings({
+      experiment: value,
+      nucleus,
+      frequencyMHz:
+        nucleus === p.setup.nucleus
+          ? p.setup.frequencyMHz
+          : nucleus === "13C"
+            ? 100.6
+            : 400,
+    });
   };
   const couplingModel = useMemo(() => {
     if (!p.setup.molecule?.atoms.length || p.setup.nucleus !== "1H")
@@ -141,25 +166,41 @@ export default function PredictionWorkspace(p: Props) {
     abort.current = controller;
     try {
       const aromaticBonds = exportPredictionAromaticBonds(molecule);
-      const output = await predictMolecule(
-        {
-          engine: setup.engine,
-          numConformers: setup.numConformers,
-          splitting:
-            setup.splitting ??
-            (setup.engine === "cascade" ? "spin-system" : "first-order"),
-          spinCouplingOverrides: setup.spinCouplingOverrides,
-          molfile: exportMoleculeMolfile(molecule),
-          aromaticBonds,
-          nucleus: setup.nucleus,
-          frequencyMHz: setup.frequencyMHz,
-          lineWidthHz: setup.lineWidthHz,
-        },
-        {
-          signal: controller.signal,
-          onProgress: (value) => setProgress(value.message),
-        },
-      );
+      const input = {
+        engine: setup.engine,
+        numConformers: setup.numConformers,
+        splitting:
+          setup.splitting ??
+          (setup.engine === "cascade" ? "spin-system" : "first-order"),
+        spinCouplingOverrides: setup.spinCouplingOverrides,
+        molfile: exportMoleculeMolfile(molecule),
+        aromaticBonds,
+        nucleus: setup.nucleus,
+        frequencyMHz: setup.frequencyMHz,
+        lineWidthHz: setup.lineWidthHz,
+      };
+      const options = {
+        signal: controller.signal,
+        onProgress: (value: import("../prediction/types").PredictionProgress) =>
+          setProgress(value.message),
+      };
+      const selectedExperiment = setup.experiment ?? setup.nucleus;
+      const output =
+        selectedExperiment === "HSQC" || selectedExperiment === "COSY"
+          ? await (
+              await import("../prediction/twoDClient")
+            ).predictTwoDMolecule(
+              {
+                ...input,
+                experiment: selectedExperiment,
+                molecule,
+                hsqcEdited: setup.hsqcEdited,
+                cosyMinJHz: setup.cosyMinJHz,
+                couplingOverrides: setup.couplingOverrides,
+              },
+              options,
+            )
+          : await predictMolecule(input, options);
       if (controller.signal.aborted) return;
       setResult(await p.onPredict(output, setup, molecule));
     } catch (e) {
@@ -198,25 +239,27 @@ export default function PredictionWorkspace(p: Props) {
         <div
           className="prediction-nucleus-switch"
           role="group"
-          aria-label="Prediction nucleus"
+          aria-label="Prediction experiment"
         >
-          {(["1H", "13C"] as const).map((nucleus) => (
+          {(["1H", "13C", "HSQC", "COSY"] as const).map((value) => (
             <button
-              key={nucleus}
+              key={value}
               disabled={running}
-              aria-pressed={p.setup.nucleus === nucleus}
-              onClick={() =>
-                settings({
-                  nucleus,
-                  frequencyMHz: nucleus === "13C" ? 100.6 : 400,
-                })
+              aria-pressed={experiment === value}
+              title={
+                value === "HSQC"
+                  ? "Predict directly bonded proton–carbon correlations"
+                  : value === "COSY"
+                    ? "Predict coupled proton–proton correlations"
+                    : `Predict ${value} spectrum`
               }
+              onClick={() => selectExperiment(value)}
             >
-              {nucleus === "1H" ? "¹H" : "¹³C"}
+              {value === "1H" ? "¹H" : value === "13C" ? "¹³C" : value}
             </button>
           ))}
         </div>
-        {p.setup.nucleus === "1H" ? (
+        {!isTwoD && p.setup.nucleus === "1H" ? (
           <button
             className={`prediction-splitting-toggle ${(p.setup.splitting ?? "first-order") !== "none" ? "active" : ""}`}
             disabled={running}
@@ -240,14 +283,14 @@ export default function PredictionWorkspace(p: Props) {
                 : "Unsplit"}
             </span>
           </button>
-        ) : (
+        ) : !isTwoD ? (
           <small
             className="prediction-decoupled"
             title="Carbon spectra are simulated with proton decoupling"
           >
             ¹H decoupled
           </small>
-        )}
+        ) : null}
         <button
           className="primary prediction-header-run"
           disabled={!p.setup.molecule?.atoms.length || running}
@@ -259,7 +302,9 @@ export default function PredictionWorkspace(p: Props) {
           ) : (
             <Play size={14} />
           )}
-          {running ? "Predicting…" : "Predict spectrum"}
+          {running
+            ? "Predicting…"
+            : `Predict ${isTwoD ? experiment : "spectrum"}`}
         </button>
         <button
           className={`prediction-settings-toggle ${settingsOpen ? "active" : ""}`}
@@ -300,34 +345,45 @@ export default function PredictionWorkspace(p: Props) {
                 <X size={17} />
               </button>
             </div>
-            {p.setup.nucleus === "1H" && (
+            {p.setup.nucleus === "1H" && experiment !== "HSQC" && (
               <div className="prediction-splitting-settings">
-                <label>
-                  Signal splitting
-                  <select
-                    aria-label="Prediction signal splitting"
-                    disabled={running}
-                    value={p.setup.splitting ?? "first-order"}
-                    onChange={(e) =>
-                      settings({
-                        splitting: e.target
-                          .value as PredictionSetup["splitting"],
-                      })
-                    }
-                  >
-                    {p.setup.engine === "cascade" && (
-                      <option value="spin-system">
-                        Learned J · exact spin simulation
+                {!isTwoD && (
+                  <label>
+                    Signal splitting
+                    <select
+                      aria-label="Prediction signal splitting"
+                      disabled={running}
+                      value={p.setup.splitting ?? "first-order"}
+                      onChange={(e) =>
+                        settings({
+                          splitting: e.target
+                            .value as PredictionSetup["splitting"],
+                        })
+                      }
+                    >
+                      {p.setup.engine === "cascade" && (
+                        <option value="spin-system">
+                          Learned J · exact spin simulation
+                        </option>
+                      )}
+                      <option value="first-order">
+                        {p.setup.engine === "cascade"
+                          ? "Learned J · first order"
+                          : "Typical J · first order"}
                       </option>
-                    )}
-                    <option value="first-order">
-                      {p.setup.engine === "cascade"
-                        ? "Learned J · first order"
-                        : "Typical J · first order"}
-                    </option>
-                    <option value="none">Unsplit chemical shifts</option>
-                  </select>
-                </label>
+                      <option value="none">Unsplit chemical shifts</option>
+                    </select>
+                  </label>
+                )}
+                {experiment === "COSY" && (
+                  <p className="prediction-splitting-note">
+                    COSY cross-peaks use{" "}
+                    {p.setup.engine === "cascade"
+                      ? "learned signed"
+                      : "editable typical"}{" "}
+                    proton J couplings. Display intensities are approximate.
+                  </p>
+                )}
                 {p.setup.engine === "cascade" ? (
                   <LearnedCouplingControls
                     result={result}
@@ -336,7 +392,8 @@ export default function PredictionWorkspace(p: Props) {
                     onChange={settings}
                   />
                 ) : (
-                  (p.setup.splitting ?? "first-order") !== "none" && (
+                  (isTwoD ||
+                    (p.setup.splitting ?? "first-order") !== "none") && (
                     <>
                       <p className="prediction-splitting-note">
                         Typical J estimates. OH/NH exchange, unresolved CH₂
@@ -574,22 +631,47 @@ export default function PredictionWorkspace(p: Props) {
             <label>
               Experiment
               <select
-                value={p.setup.nucleus}
+                aria-label="Prediction experiment"
+                value={experiment}
                 disabled={running}
                 onChange={(e) =>
-                  settings({
-                    nucleus: e.target.value as "1H" | "13C",
-                    frequencyMHz: e.target.value === "13C" ? 100.6 : 400,
-                  })
+                  selectExperiment(
+                    e.target.value as NonNullable<
+                      PredictionSetup["experiment"]
+                    >,
+                  )
                 }
               >
                 <option value="1H">¹H proton</option>
                 <option value="13C">¹³C carbon</option>
+                <option value="HSQC">HSQC · ¹H–¹³C</option>
+                <option value="COSY">COSY · ¹H–¹H</option>
               </select>
             </label>
+            {experiment === "HSQC" && (
+              <label className="prediction-check">
+                <input
+                  type="checkbox"
+                  checked={p.setup.hsqcEdited ?? false}
+                  disabled={running}
+                  onChange={(e) => settings({ hsqcEdited: e.target.checked })}
+                />
+                Multiplicity-edited HSQC · CH₂ opposite sign
+              </label>
+            )}
+            {experiment === "COSY" && (
+              <PredictionNumber
+                label="Minimum |J| (Hz)"
+                value={p.setup.cosyMinJHz ?? 0.5}
+                min={0}
+                max={100}
+                disabled={running}
+                onChange={(cosyMinJHz) => settings({ cosyMinJHz })}
+              />
+            )}
             <div className="prediction-field-pair">
               <PredictionNumber
-                label="Frequency (MHz)"
+                label={isTwoD ? "¹H frequency (MHz)" : "Frequency (MHz)"}
                 value={p.setup.frequencyMHz}
                 min={10}
                 max={2000}
@@ -641,7 +723,7 @@ export default function PredictionWorkspace(p: Props) {
               ) : (
                 <Play size={16} />
               )}{" "}
-              {running ? "Predicting…" : `Predict ${p.setup.nucleus}`}
+              {running ? "Predicting…" : `Predict ${experiment}`}
             </button>
             {running && (
               <div className="prediction-progress" role="status">
@@ -674,16 +756,29 @@ export default function PredictionWorkspace(p: Props) {
               Place on current spectrum
             </button>
             <p className="prediction-note">
-              Predictions create a new spectrum in the list on the left.
-              {p.setup.engine === "cascade"
-                ? "Chemical shifts come from local CASCADE neural inference and an ensemble of 3D conformers."
-                : "Chemical shifts come from experimental reference matches."}{" "}
-              {p.setup.engine === "cascade"
-                ? "Proton splitting uses learned signed J values, with exact second-order simulation available."
-                : "Proton splitting uses editable typical J estimates."}{" "}
-              Carbon signals are proton-decoupled. Automatic integrals show
-              modeled counts or collective transition areas for exact spin
-              systems.
+              {isTwoD ? (
+                <>
+                  {experiment === "HSQC"
+                    ? "Directly bonded ¹H–¹³C pairs form HSQC cross-peaks. CH₂ sites remain separate when the shift model resolves them."
+                    : "Coupled ¹H sites form symmetric COSY cross-peaks and a diagonal. Exchangeable proton couplings are omitted."}{" "}
+                  Predicted 1D traces are included in the same document. Contour
+                  intensities and widths are approximate; pulse-sequence
+                  transfer and relaxation are not simulated.
+                </>
+              ) : (
+                <>
+                  Predictions create a new spectrum in the list on the left.
+                  {p.setup.engine === "cascade"
+                    ? "Chemical shifts come from local CASCADE neural inference and an ensemble of 3D conformers."
+                    : "Chemical shifts come from experimental reference matches."}{" "}
+                  {p.setup.engine === "cascade"
+                    ? "Proton splitting uses learned signed J values, with exact second-order simulation available."
+                    : "Proton splitting uses editable typical J estimates."}{" "}
+                  Carbon signals are proton-decoupled. Automatic integrals show
+                  modeled counts or collective transition areas for exact spin
+                  systems.
+                </>
+              )}
             </p>
             <a
               className="prediction-attribution"
@@ -700,21 +795,65 @@ export default function PredictionWorkspace(p: Props) {
                   onClick={() => setDetails(!details)}
                 >
                   <Check size={15} />
-                  {result.shifts.length}{" "}
-                  {result.engine === "cascade"
-                    ? "atom shifts predicted"
-                    : "environments matched"}
+                  {result.twoD ? (
+                    `${result.twoD.experiment} · ${result.twoD.correlations.filter((c) => c.kind !== "diagonal").length} correlations`
+                  ) : (
+                    <>
+                      {result.shifts.length}{" "}
+                      {result.engine === "cascade"
+                        ? "atom shifts predicted"
+                        : "environments matched"}
+                    </>
+                  )}
                   <ChevronDown size={14} />
                 </button>
                 {[
                   ...new Set([
                     ...result.warnings,
                     ...(result.splitting?.warnings ?? []),
+                    ...(result.twoD?.warnings ?? []),
                   ]),
                 ].map((w, i) => (
                   <p key={i}>{w}</p>
                 ))}
-                {details && (
+                {details && result.twoD && (
+                  <div className="prediction-match-table">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Atom pair</th>
+                          <th>F2 / ppm</th>
+                          <th>F1 / ppm</th>
+                          <th>Type</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {result.twoD.correlations.map((c) => {
+                          const atom = (id: string, label?: string) => {
+                            const a = p.setup.molecule?.atoms.find(
+                              (a) => a.id === id,
+                            );
+                            return (
+                              label ?? `${a?.element ?? ""}${a?.index ?? ""}`
+                            );
+                          };
+                          return (
+                            <tr key={c.id}>
+                              <td>
+                                {atom(c.atomIdX, c.protonLabelX)} ↔{" "}
+                                {atom(c.atomIdY, c.protonLabelY)}
+                              </td>
+                              <td>{c.xPpm.toFixed(3)}</td>
+                              <td>{c.yPpm.toFixed(3)}</td>
+                              <td>{c.kind}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                {details && !result.twoD && (
                   <div className="prediction-match-table">
                     <table>
                       <thead>

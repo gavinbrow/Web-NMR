@@ -2566,6 +2566,16 @@ export default function App() {
       referenceOffset: s.referenceOffset + dx,
       metadata: { ...s.metadata, referenceAnnotation: annotation },
       twoD: { ...s.twoD!, referenceOffsetF1: s.twoD!.referenceOffsetF1 + dy },
+      molecule: s.molecule
+        ? {
+            ...s.molecule,
+            assignments: s.molecule.assignments.map((a) => ({
+              ...a,
+              ppm: a.ppm + dx,
+              ...(a.ppmF1 !== undefined ? { ppmF1: a.ppmF1 + dy } : {}),
+            })),
+          }
+        : undefined,
       twoDView: {
         ...v,
         xView: [v.xView[0] + dx, v.xView[1] + dx],
@@ -2724,11 +2734,27 @@ export default function App() {
       throw new Error(
         "This project already has 200 spectra. Create a new project for more predictions.",
       );
-    const { predictedSpectrum } = await import("./features/predictedSpectrum");
-    const spectrum = predictedSpectrum(result, setup, molecule, spectra.length);
-    commit([...spectra, spectrum]);
+    const additions = result.twoD
+      ? (
+          await import("./features/predictedTwoDSpectrum")
+        ).predictedTwoDSpectrum(result, setup, molecule, spectra.length)
+      : [
+          (await import("./features/predictedSpectrum")).predictedSpectrum(
+            result,
+            setup,
+            molecule,
+            spectra.length,
+          ),
+        ];
+    if (spectra.length + additions.length > 200)
+      throw new Error("Create a new project for more predictions.");
+    const spectrum = additions[0];
+    commit([...spectra, ...additions]);
     setActiveId(spectrum.id);
     setSelected([spectrum.id]);
+    setSelectedAtomIds([]);
+    setAssigningAtoms(false);
+    if (result.twoD) setTool("select");
     setActiveStackId(null);
     setSelectedStackId(null);
     setMode("single");
@@ -2741,7 +2767,9 @@ export default function App() {
     setTab("Analysis");
     setShowPeaks(true);
     notify(
-      `${setup.nucleus} prediction added · ${result.shifts.length} ${result.engine === "cascade" ? "atom shifts predicted" : "matched atom environments"}`,
+      result.twoD
+        ? `${result.twoD.experiment} prediction added · ${result.twoD.correlations.filter((c) => c.kind !== "diagonal").length} correlations · click a cross-peak to see its atoms`
+        : `${setup.nucleus} prediction added · ${result.shifts.length} ${result.engine === "cascade" ? "atom shifts predicted" : "matched atom environments"}`,
     );
     return spectrum.prediction!;
   }
@@ -4548,6 +4576,8 @@ export default function App() {
                     }
                     spectra={spectra}
                     onImport1D={() => traceInput.current?.click()}
+                    selectedAtomIds={selectedAtomIds}
+                    onAssignmentSelect={setSelectedAtomIds}
                     viewState={active.twoDView}
                     onViewChange={(v) =>
                       setSpectra((all) =>

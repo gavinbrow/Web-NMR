@@ -15,6 +15,7 @@
   min-height: 35px;
   font-size: 13px;
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 .prediction-heading > strong {
   font-size: 12px;
@@ -40,7 +41,7 @@
 .prediction-nucleus-switch button {
   background: transparent;
   color: #acbac8;
-  padding: 4px 12px;
+  padding: 4px 9px;
   border-radius: 4px;
   font-size: 12px;
 }
@@ -199,6 +200,16 @@
   line-height: 1.6;
   color: #9ba7b7;
   margin: 15px 0;
+}
+.prediction-settings .prediction-check {
+  flex-direction: row;
+  align-items: center;
+  line-height: 1.5;
+}
+.prediction-settings .prediction-check input {
+  width: auto;
+  flex-shrink: 0;
+  accent-color: #3b9cb0;
 }
 .prediction-progress {
   display: flex;
@@ -451,5 +462,11 @@
   font-size: 12px;
   margin-bottom: 12px;
 }
-label.prediction-coupling-row { display: flex; flex-direction: row; }
-label.prediction-coupling-row > input { width: 76px; flex-shrink: 0; }
+label.prediction-coupling-row {
+  display: flex;
+  flex-direction: row;
+}
+label.prediction-coupling-row > input {
+  width: 76px;
+  flex-shrink: 0;
+}

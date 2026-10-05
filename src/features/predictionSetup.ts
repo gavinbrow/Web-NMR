@@ -6,6 +6,10 @@ import type {
 } from "../prediction/types";
 
 export interface PredictionSetup {
+  /** Older projects infer the 1D experiment from nucleus. */
+  experiment?: "1H" | "13C" | "HSQC" | "COSY";
+  hsqcEdited?: boolean;
+  cosyMinJHz?: number;
   engine?: "cdk-hose-nmrshiftdb" | "cascade";
   numConformers?: number;
   molecule: MoleculeDocument | null;
@@ -28,6 +32,7 @@ export interface AtomAssignment {
   id: string;
   atomIds: string[];
   ppm: number;
+  ppmF1?: number;
   peakId?: string;
   label?: string;
 }
@@ -43,6 +48,8 @@ export function defaultPredictionSetup(): PredictionSetup {
     numConformers: 10,
     molecule: null,
     nucleus: "1H",
+    hsqcEdited: false,
+    cosyMinJHz: 0.5,
     frequencyMHz: 400,
     lineWidthHz: 1,
     title: "",
@@ -171,6 +178,15 @@ export function validPredictionSetup(value: unknown): value is PredictionSetup {
   const p = value as PredictionSetup;
   return (
     !!p &&
+    (p.experiment === undefined ||
+      ["1H", "13C", "HSQC", "COSY"].includes(p.experiment)) &&
+    (p.experiment === undefined ||
+      p.nucleus === (p.experiment === "13C" ? "13C" : "1H")) &&
+    (p.hsqcEdited === undefined || typeof p.hsqcEdited === "boolean") &&
+    (p.cosyMinJHz === undefined ||
+      (Number.isFinite(p.cosyMinJHz) &&
+        p.cosyMinJHz >= 0 &&
+        p.cosyMinJHz <= 100)) &&
     (p.engine === undefined ||
       ["cdk-hose-nmrshiftdb", "cascade"].includes(p.engine)) &&
     (p.numConformers === undefined ||
@@ -248,6 +264,7 @@ export function validSpectrumMolecule(
       typeof a.id !== "string" ||
       assignmentIds.has(a.id) ||
       !Number.isFinite(a.ppm) ||
+      (a.ppmF1 !== undefined && !Number.isFinite(a.ppmF1)) ||
       !Array.isArray(a.atomIds) ||
       !a.atomIds.length ||
       !a.atomIds.every((id) => atomIds.has(id)) ||
@@ -311,9 +328,83 @@ export function validPredictionResult(
     ) &&
     (r.cascade === undefined || validCascadeMetadata(r.cascade)) &&
     (r.spinSystem === undefined || validSpinSystem(r.spinSystem, r.shifts)) &&
+    (r.twoD === undefined || validTwoDPrediction(r)) &&
     (r.splitting === undefined ||
       validPredictionSplitting(r.splitting, r.shifts))
   );
+}
+
+function validTwoDPrediction(r: PredictionResult): boolean {
+  const d = r.twoD;
+  if (
+    !d ||
+    r.nucleus !== "1H" ||
+    !["HSQC", "COSY"].includes(d.experiment) ||
+    !d.settings ||
+    typeof d.settings.hsqcEdited !== "boolean" ||
+    !Number.isFinite(d.settings.cosyMinJHz) ||
+    d.settings.cosyMinJHz < 0 ||
+    d.settings.cosyMinJHz > 100 ||
+    ![d.settings.protonFrequencyMHz, d.settings.carbonFrequencyMHz].every(
+      (n) => Number.isFinite(n) && n >= 1 && n <= 2000,
+    ) ||
+    !Number.isFinite(d.settings.lineWidthHz) ||
+    d.settings.lineWidthHz < 0.1 ||
+    d.settings.lineWidthHz > 100 ||
+    !Array.isArray(d.warnings) ||
+    d.warnings.length > 100 ||
+    !d.warnings.every((w) => typeof w === "string" && w.length < 10000) ||
+    !Array.isArray(d.correlations) ||
+    d.correlations.length > 10000
+  )
+    return false;
+  if (d.experiment === "HSQC") {
+    if (
+      !d.carbonResult ||
+      d.carbonResult.twoD !== undefined ||
+      d.carbonResult.nucleus !== "13C" ||
+      d.carbonResult.engine !== r.engine ||
+      !validPredictionResult(d.carbonResult)
+    )
+      return false;
+  } else if (d.carbonResult !== undefined) return false;
+  const ids = new Set<string>();
+  const protonAtoms = new Set(r.shifts.map((s) => s.atomIndex));
+  const indirectAtoms = new Set(
+    (d.carbonResult ?? r).shifts.map((s) => s.atomIndex),
+  );
+  return d.correlations.every((c) => {
+    if (
+      !c ||
+      typeof c.id !== "string" ||
+      c.id.length > 200 ||
+      ids.has(c.id) ||
+      !["direct", "diagonal", "cross"].includes(c.kind) ||
+      ![c.xPpm, c.yPpm, c.weight].every(Number.isFinite) ||
+      c.weight <= 0 ||
+      c.weight > 1e6 ||
+      ![1, -1].includes(c.sign) ||
+      ![c.atomIndexX, c.atomIndexY].every(
+        (n) => Number.isInteger(n) && n >= 0 && n < 300,
+      ) ||
+      !protonAtoms.has(c.atomIndexX) ||
+      !indirectAtoms.has(c.atomIndexY) ||
+      ![c.atomIdX, c.atomIdY].every(
+        (id) => typeof id === "string" && id.length > 0 && id.length <= 200,
+      ) ||
+      ![c.siteIdX, c.siteIdY, c.protonLabelX, c.protonLabelY].every(
+        (v) => v === undefined || (typeof v === "string" && v.length <= 200),
+      ) ||
+      (c.jHz !== undefined &&
+        (!Number.isFinite(c.jHz) || Math.abs(c.jHz) > 100)) ||
+      (c.source !== undefined &&
+        !["fullsspruce", "estimate", "manual"].includes(c.source)) ||
+      (d.experiment === "HSQC" ? c.kind !== "direct" : c.kind === "direct")
+    )
+      return false;
+    ids.add(c.id);
+    return true;
+  });
 }
 
 function validPredictionSplitting(
