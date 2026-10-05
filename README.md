@@ -27,7 +27,7 @@ Open the local URL printed by the development server. Build the static applicati
 - Dark menus, resizable navigator/inspector/ribbon/results, and a right-click Properties dialog for 1D appearance, grid, axes, peaks, integral curves, multiplets, stacking, geometry and metadata. Appearance changes are included in figure exports and project archives.
 - Local IndexedDB recovery, edit undo/redo, separate zoom history, real/imaginary/magnitude/FID views, and collapsible panels.
 
-The initial project contains six explicitly labelled **synthetic demonstration spectra**. User-selected NMR files are decoded and processed in the browser; they are not uploaded to the hosting service. Source arrays, metadata, processing recipes, and analysis are preserved in the downloaded project. Local recovery is browser/origin specific; download a project for a portable copy.
+New workspaces start with an empty **Untitled project** and no spectra. User-selected NMR files are decoded and processed in the browser; they are not uploaded to the hosting service. Source arrays, metadata, processing recipes, and analysis are preserved in the downloaded project. Local recovery is browser/origin specific; download a project for a portable copy. Existing saved workspaces remain available for recovery, or choose **Start empty** to begin a blank workspace.
 
 ## Familiar shortcuts
 

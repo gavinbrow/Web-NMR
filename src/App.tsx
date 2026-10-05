@@ -99,7 +99,6 @@ import {
   type WorkspaceDocuments,
   type WorkspaceDocument,
 } from "./features/workspaceDocuments";
-import { createDemoSpectra } from "./features/demo";
 import { droppedFiles } from "./features/dropFiles";
 import {
   downloadProject,
@@ -555,9 +554,8 @@ export default function App() {
         : ids,
     );
   };
-  const initial = useMemo(() => createDemoSpectra(), []);
-  const [spectra, setSpectra] = useState<Spectrum[]>(initial),
-    [activeId, setActiveId] = useState(initial[0]?.id ?? ""),
+  const [spectra, setSpectra] = useState<Spectrum[]>([]),
+    [activeId, setActiveId] = useState(""),
     [selected, setSelected] = useState<string[]>([]);
   const [stacks, setStacks] = useState<SpectrumStack[]>([]),
     [activeStackId, setActiveStackId] = useState<string | null>(null),
@@ -633,8 +631,8 @@ export default function App() {
       }
     >
   >({});
-  const [projectName, setProjectName] = useState("Reaction monitoring"),
-    [isDemo, setIsDemo] = useState(true),
+  const [projectName, setProjectName] = useState("Untitled project"),
+    [isDemo, setIsDemo] = useState(false),
     [tab, setTab] = useState<Tab>("Analysis"),
     [tool, setTool] = useState<Tool>("zoom"),
     [panel, setPanel] = useState<Panel>("overview");
@@ -914,7 +912,7 @@ export default function App() {
     savedAt: new Date().toISOString(),
   });
   const [documents, setDocuments] = useState(() =>
-    createWorkspace(project(), { isDemo: true }),
+    createWorkspace(project()),
   );
   const documentsRef = useRef(documents);
   const documentHistory = useRef(
@@ -3818,22 +3816,6 @@ export default function App() {
                 label="Open project"
                 onClick={() => projectInput.current?.click()}
               />
-              <RibbonButton
-                icon={Waves}
-                label="Example project"
-                onClick={() => {
-                  const d = createDemoSpectra();
-                  openProjectDocument(
-                    {
-                      ...createBlankProject("Reaction monitoring"),
-                      spectra: d,
-                      activeId: d[0].id,
-                      view: [10, -0.5],
-                    },
-                    true,
-                  );
-                }}
-              />
               <span className="group-label">Open</span>
             </div>
             <div className="ribbon-group">
@@ -6363,7 +6345,7 @@ export default function App() {
                   setReady(true);
                 }}
               >
-                Start with example
+                Start empty
               </button>
             </div>
             <button
