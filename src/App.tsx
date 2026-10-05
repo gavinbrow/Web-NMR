@@ -3588,7 +3588,11 @@ export default function App() {
                 icon={Waves}
                 label="Overlay"
                 active={mode === "overlay"}
-                onClick={() => setMode("overlay")}
+                onClick={() =>
+                  setMode((current) =>
+                    current === "overlay" ? "single" : "overlay",
+                  )
+                }
               />
               <RibbonButton
                 icon={FileText}
